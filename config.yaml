@@ -1,0 +1,35 @@
+server:
+  port: 6006
+  cert: "../../../bhl/.cert/combined-tma-cert.pem"
+  key: "../../../bhl/.cert/tma.local+2-key.pem"
+
+commands:
+  command_file: "./config/commands.json"
+  command_threshold: 2
+
+models:
+  vosk:
+    encoder: "../Models/sherpa-onnx-streaming-zipformer-small-ru-vosk-2025-08-16/encoder.onnx"
+    decoder: "../Models/sherpa-onnx-streaming-zipformer-small-ru-vosk-2025-08-16/decoder.onnx"
+    joiner: "../Models/sherpa-onnx-streaming-zipformer-small-ru-vosk-2025-08-16/joiner.onnx"
+    tokens: "../Models/sherpa-onnx-streaming-zipformer-small-ru-vosk-2025-08-16/tokens.txt"
+    model_type: "zipformer2"
+
+  punct:
+    model_path: "../Models/RuPunct/small/"
+    onnx_path: "../Models/rupunct_onnx/RuPunct_small.onnx"
+
+  classifier:
+    model_path: "../Models/distilbert-base-uncased-finetuned-sst"
+
+decoding:
+  num_threads: 1
+  provider: "cpu"
+  decoding_method: "greedy_search"
+  max_active_paths: 4
+
+endpoint:
+  enable: true
+  rule1_min_trailing_silence: 2.4
+  rule2_min_trailing_silence: 1.2
+  rule3_min_utterance_length: 20
