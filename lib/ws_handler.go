@@ -148,20 +148,6 @@ func (h *WebSocketHandler) handleAudioData(session *VoskSession, remoteAddr stri
 	// Очищаем текст от лишних пробелов
 	text = strings.TrimSpace(text)
 
-	// Отправка промежуточного результата в браузер (только если текст изменился)
-	if text != "" && session.LastText != text {
-		session.LastText = text
-
-		resp := map[string]interface{}{
-			"text":    text,
-			"segment": session.Segment,
-			"type":    "intermediate",
-		}
-
-		h.sendResponse(session.Conn, resp)
-		log.Printf("Intermediate result from %s: '%s'", remoteAddr, text)
-	}
-
 	// Проверка endpoint
 	if session.Recognizer.IsEndpoint(session.Stream) {
 		log.Printf("=== ENDPOINT DETECTED ===")
@@ -221,11 +207,12 @@ func (h *WebSocketHandler) handleAudioData(session *VoskSession, remoteAddr stri
 			log.Printf("Sending command response: %v", resp)
 		} else {
 			// Ответ с пунктуацией (только если команда не найдена)
-			finalText := text
+            log.Printf("Punctuatin start: '%s'", text)
+            finalText := text
 			if h.punctuator != nil {
 				punctuated, err := h.punctuator.Predict(text)
 				if err != nil {
-					log.Printf("Punctuation error: %v", err)
+					log.Printf("ws_h: Punctuation error: %v", err)
 				} else {
 					finalText = punctuated
 					log.Printf("Punctuated: '%s' → '%s'", text, finalText)
@@ -251,7 +238,22 @@ func (h *WebSocketHandler) handleAudioData(session *VoskSession, remoteAddr stri
 		session.LastText = ""
 
 		log.Printf("=== ENDPOINT PROCESSING COMPLETE ===\n")
-	}
+	} else {
+        // Отправка промежуточного результата в браузер (только если текст изменился)
+        if text != "" && session.LastText != text {
+            session.LastText = text
+
+            resp := map[string]interface{}{
+                "text":    text,
+                "segment": session.Segment,
+                "type":    "intermediate",
+            }
+
+            h.sendResponse(session.Conn, resp)
+            log.Printf("Intermediate result from %s: '%s'", remoteAddr, text)
+        }
+
+    }
 }
 
 func bytesToFloat32Slice(data []byte) []float32 {

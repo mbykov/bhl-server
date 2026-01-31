@@ -16,8 +16,10 @@ models:
     model_type: "zipformer2"
 
   punct:
-    model_path: "../Models/RuPunct/small/"
-    onnx_path: "../Models/rupunct_onnx/RuPunct_small.onnx"
+    # model_path: "../Models/RuPunct/small/"
+    # onnx_path: "../Models/rupunct_onnx/RuPunct_small.onnx"
+    model_path: "../Models/rupunct_onnx/big/"
+    onnx_path: "../Models/rupunct_onnx/big/model.onnx"
 
   classifier:
     model_path: "../Models/distilbert-base-uncased-finetuned-sst"
@@ -30,6 +32,6 @@ decoding:
 
 endpoint:
   enable: true
-  rule1_min_trailing_silence: 2.4
-  rule2_min_trailing_silence: 1.2
+  rule1_min_trailing_silence: 1.2
+  rule2_min_trailing_silence: 0.6
   rule3_min_utterance_length: 20

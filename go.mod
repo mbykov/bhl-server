@@ -1,8 +1,8 @@
-module voice-assistant
+module bhl
 
 go 1.25.6
 
-replace github.com/mbykov/rupunct-go => ../rupunct-module
+replace github.com/mbykov/rupunct-go => ../rupunct-go
 
 replace github.com/mbykov/command-go => ../command-go-levenshtein
 

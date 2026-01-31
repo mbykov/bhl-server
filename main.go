@@ -8,8 +8,7 @@ import (
     "syscall"
     "time"
 
-    "voice-assistant/lib"
-    // "github.com/mbykov/rupunct-go"
+    "bhl/lib"
     rupunct "github.com/mbykov/rupunct-go"
     command "github.com/mbykov/command-go"
 )
@@ -21,11 +20,11 @@ func main() {
         log.Fatalf("Failed to load config: %v", err)
     }
 
-    log.Printf("=== CONFIGURATION ===")
-	log.Printf("Punctuation model: %s", config.Models.Punct.OnnxPath)
-	log.Printf("Command file: %s", config.Commands.CommandFile)
-	log.Printf("Command threshold: %d", config.Commands.CommandThreshold)
-	log.Printf("=====================")
+    // log.Printf("=== CONFIGURATION ===")
+	// log.Printf("Punctuation model: %s", config.Models.Punct.OnnxPath)
+	// log.Printf("Command file: %s", config.Commands.CommandFile)
+	// log.Printf("Command threshold: %d", config.Commands.CommandThreshold)
+	// log.Printf("=====================")
 
     // 1. Создаем пунктуатор НАПРЯМУЮ
     var punctuator rupunct.Punctuator

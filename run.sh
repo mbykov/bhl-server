@@ -16,7 +16,7 @@ go mod tidy
 
 # Собираем приложение с тегом ORT для ONNX Runtime
 echo "Building application..."
-go build -tags ORT -o voice-assistant .
+go build -tags ORT -o bhl .
 
 # Проверяем существование файлов моделей
 # check_model_file() {
@@ -33,7 +33,7 @@ go build -tags ORT -o voice-assistant .
 
 # Запускаем приложение
 echo "Starting voice assistant..."
-./voice-assistant
+./bhl
 # ./voice-assistant \
 #   --encoder ../Models/sherpa-onnx-streaming-zipformer-small-ru-vosk-2025-08-16/encoder.onnx \
 #   --decoder ../Models/sherpa-onnx-streaming-zipformer-small-ru-vosk-2025-08-16/decoder.onnx \
