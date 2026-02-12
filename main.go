@@ -1,174 +1,144 @@
 package main
 
 import (
-    "log"
-    "net/http"
+    "context"
+    "log/slog"
+    "net/http"   // <-- добавлено
     "os"
     "os/signal"
     "syscall"
     "time"
 
     "bhl/lib"
-    rupunct "github.com/mbykov/rupunct-go"
-    command "github.com/mbykov/command-go"
+    "github.com/mbykov/bhl-command-go"
+    sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
 )
 
 func main() {
-    // Загрузка конфигурации
-    config, err := lib.LoadConfig()
-    if err != nil {
-        log.Fatalf("Failed to load config: %v", err)
-    }
+	// 1. Настройка логирования
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+	slog.SetDefault(logger)
 
-    // log.Printf("=== CONFIGURATION ===")
-	// log.Printf("Punctuation model: %s", config.Models.Punct.OnnxPath)
-	// log.Printf("Command file: %s", config.Commands.CommandFile)
-	// log.Printf("Command threshold: %d", config.Commands.CommandThreshold)
-	// log.Printf("=====================")
+	// 2. Загрузка конфигурации
+	config, err := lib.LoadConfig()
+	if err != nil {
+		logger.Error("failed to load config", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("config loaded",
+		"port", config.Server.Port,
+		"vosk_encoder", config.Models.Vosk.Encoder,
+		"giga_encoder", config.Models.Giga.Encoder)
 
-    // 1. Создаем пунктуатор НАПРЯМУЮ
-    var punctuator rupunct.Punctuator
-    if config.Models.Punct.ModelPath != "" && config.Models.Punct.OnnxPath != "" {
-        log.Printf("Loading punctuation model from: %s", config.Models.Punct.ModelPath)
+	// 3. Инициализация GigaAM (один экземпляр для всех сессий)
+	gigaRec := initGigaRecognizer(config)
+	if gigaRec == nil {
+		logger.Error("failed to create GigaAM recognizer")
+		os.Exit(1)
+	}
+	defer sherpa.DeleteOfflineRecognizer(gigaRec)
 
-        punctuator, err = rupunct.NewPunctuator(
-            config.Models.Punct.ModelPath,
-            config.Models.Punct.OnnxPath,
-        )
-        if err != nil {
-            log.Printf("ERROR: Failed to initialize punctuation model: %v", err)
-            log.Printf("Punctuation will be disabled")
-            punctuator = nil
-        } else {
-            log.Println("✓ Punctuation model loaded successfully")
-            defer punctuator.Close()
-        }
-    } else {
-        log.Println("ℹ️  Punctuation model paths not provided, skipping punctuation")
-    }
+	// 4. Инициализация модуля поиска команд
+	var cmdEngine *command.SearchEngine
+	var cmdThr float32
+	if config.Command.Enabled {
+		cmdEngine, err = initCommandEngine(config)
+		if err != nil {
+			logger.Error("failed to init command engine", "error", err)
+			os.Exit(1)
+		}
+		defer cmdEngine.Close()
+		cmdThr = config.Command.Threshold
+		logger.Info("command engine initialized", "threshold", cmdThr)
+	} else {
+		logger.Info("command engine disabled")
+	}
 
-    // 1. Создаем менеджер сессий Vosk
-    sessionManager := lib.NewSessionManager()
+	// 5. Создание менеджера сессий
+	sessionManager := lib.NewSessionManager(config, gigaRec, cmdEngine, cmdThr)
 
-    // 3. Создаем менеджер моделей для команд (через hugot)
-    modelManager, err := lib.NewModelManager()
-    if err != nil {
-        log.Printf("Warning: Failed to create model manager for hugot: %v", err)
-        // Не фатальная ошибка - команды пока не обрабатываем
-    }
-    if modelManager != nil {
-        defer modelManager.Destroy()
+	// 6. Настройка HTTP маршрута
+	wsHandler := lib.NewWebSocketHandler(sessionManager)
+	http.HandleFunc("/", wsHandler.Handler())
 
-        // Инициализируем классификатор команд если путь указан
-        if config.Models.Classifier.ModelPath != "" {
-            if err := modelManager.InitCommandClassifier(config.Models.Classifier.ModelPath); err != nil {
-                log.Printf("Warning: Failed to init command classifier: %v", err)
-            }
-        }
-    }
+	// 7. Запуск сервера (SSL опционально)
+	addr := ":" + config.Server.Port
+	useSSL := checkSSLCertificates(config.Server.Cert, config.Server.Key)
 
+	serverCtx, stop := signal.NotifyContext(context.Background(),
+		syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-    if _, err := os.Stat(config.Commands.CommandFile); os.IsNotExist(err) {
-        log.Printf("ERROR: Command definitions file not found: %s", config.Commands.CommandFile)
-    } else {
-        log.Printf("Command definitions file found: %s", config.Commands.CommandFile)
-    }
+	if useSSL {
+		logger.Info("starting secure server", "addr", "https://localhost"+addr)
+		go func() {
+			if err := http.ListenAndServeTLS(addr, config.Server.Cert, config.Server.Key, nil); err != nil {
+				logger.Error("secure server failed", "error", err)
+				stop()
+			}
+		}()
+	} else {
+		logger.Info("starting server (no SSL)", "addr", "http://localhost"+addr)
+		go func() {
+			if err := http.ListenAndServe(addr, nil); err != nil {
+				logger.Error("server failed", "error", err)
+				stop()
+			}
+		}()
+	}
 
-    // 2. Создаем определитель команд
-    var commandResolver *command.CommandResolver
-    if config.Commands.CommandFile != "" {
-        log.Printf("Loading command definitions from: %s", config.Commands.CommandFile)
-        commandResolver, err = command.NewResolver(
-            config.Commands.CommandFile,
-            config.Commands.CommandThreshold,
-        )
-        if err != nil {
-            log.Printf("ERROR: Failed to load command resolver: %v", err)
-            commandResolver = nil
-        } else {
-            log.Println("✓ Command resolver loaded successfully")
-        }
-    }
+	// 8. Ожидание сигнала завершения
+	<-serverCtx.Done()
+	logger.Info("shutting down gracefully...")
 
-    // Создаем CommandExecutor (заглушку)
-    commandExecutor := &lib.CommandExecutor{}
+	// 9. Завершение всех сессий
+	sessionManager.Shutdown()
 
-    // 4. Создаем WebSocket обработчик
-    // wsHandler := lib.NewWebSocketHandler(config, sessionManager, punctuator)
-    wsHandler := lib.NewWebSocketHandler(
-        config,
-        sessionManager,
-        punctuator,
-        commandResolver,
-        commandExecutor,
-    )
-
-
-    // 5. Настройка HTTP маршрутов "/ws"
-    http.HandleFunc("/", wsHandler.Handler())
-
-    // Проверка SSL сертификатов
-    useSSL := checkSSLCertificates(config.Server.Cert, config.Server.Key)
-
-    // Запуск сервера
-    addr := ":" + config.Server.Port
-
-    if useSSL {
-        log.Printf("Starting secure ASR WebSocket server on https://%s", addr)
-        log.Printf("SSL certificate: %s", config.Server.Cert)
-        log.Printf("SSL key: %s", config.Server.Key)
-
-        log.Printf("Available addresses:")
-        log.Printf("  https://localhost%s", addr)
-        log.Printf("  https://127.0.0.1%s", addr)
-        log.Printf("  https://tma.local%s", addr)
-
-        go func() {
-            if err := http.ListenAndServeTLS(addr, config.Server.Cert, config.Server.Key, nil); err != nil {
-                log.Fatalf("Failed to start secure server: %v", err)
-            }
-        }()
-    } else {
-        log.Printf("Starting ASR WebSocket server on http://%s", addr)
-        log.Printf("Warning: Running without SSL. For secure connections, provide --cert and --key parameters")
-
-        go func() {
-            if err := http.ListenAndServe(addr, nil); err != nil {
-                log.Fatalf("Failed to start server: %v", err)
-            }
-        }()
-    }
-
-    // Ожидание сигнала завершения
-    sigChan := make(chan os.Signal, 1)
-    signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-    log.Printf("Server started successfully. Press Ctrl+C to stop.")
-
-    // Ожидание сигнала завершения
-    <-sigChan
-    log.Println("Shutting down server...")
-
-    // Даем время для завершения операций
-    time.Sleep(1 * time.Second)
-    log.Println("Server stopped.")
+	// 10. Даём время на закрытие соединений
+	time.Sleep(500 * time.Millisecond)
+	logger.Info("server stopped")
 }
 
-// checkSSLCertificates проверяет наличие SSL сертификатов
+// initGigaRecognizer создаёт общий OfflineRecognizer.
+func initGigaRecognizer(cfg *lib.Config) *sherpa.OfflineRecognizer {
+	gConfig := sherpa.OfflineRecognizerConfig{}
+	gConfig.FeatConfig.SampleRate = 16000
+	gConfig.FeatConfig.FeatureDim = 64
+	gConfig.ModelConfig.Transducer.Encoder = cfg.Models.Giga.Encoder
+	gConfig.ModelConfig.Transducer.Decoder = cfg.Models.Giga.Decoder
+	gConfig.ModelConfig.Transducer.Joiner = cfg.Models.Giga.Joiner
+	gConfig.ModelConfig.Tokens = cfg.Models.Giga.Tokens
+	gConfig.ModelConfig.NumThreads = cfg.Decoding.NumThreads
+	gConfig.ModelConfig.ModelType = "nemo_transducer"
+	return sherpa.NewOfflineRecognizer(&gConfig)
+}
+
+// initCommandEngine инициализирует SearchEngine и загружает команды.
+func initCommandEngine(cfg *lib.Config) (*command.SearchEngine, error) {
+	engine, err := command.NewSearchEngine(
+		cfg.Command.OnnxPath,
+		cfg.Command.TokenizerPath,
+		cfg.Command.OnnxLibPath,
+		cfg.Command.Threshold,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err := engine.LoadCommands(cfg.Command.CommandsJSON); err != nil {
+		engine.Close()
+		return nil, err
+	}
+	return engine, nil
+}
+
+// checkSSLCertificates проверяет существование файлов сертификатов.
 func checkSSLCertificates(certPath, keyPath string) bool {
-    if certPath == "" || keyPath == "" {
-        return false
-    }
-
-    if _, err := os.Stat(certPath); os.IsNotExist(err) {
-        log.Printf("SSL certificate not found: %s", certPath)
-        return false
-    }
-
-    if _, err := os.Stat(keyPath); os.IsNotExist(err) {
-        log.Printf("SSL key not found: %s", keyPath)
-        return false
-    }
-
-    return true
+	if certPath == "" || keyPath == "" {
+		return false
+	}
+	_, errCert := os.Stat(certPath)
+	_, errKey := os.Stat(keyPath)
+	return errCert == nil && errKey == nil
 }

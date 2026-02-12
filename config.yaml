@@ -3,10 +3,6 @@ server:
   cert: "../../../bhl/.cert/combined-tma-cert.pem"
   key: "../../../bhl/.cert/tma.local+2-key.pem"
 
-commands:
-  command_file: "./config/commands.json"
-  command_threshold: 2
-
 models:
   vosk:
     encoder: "../Models/sherpa-onnx-streaming-zipformer-small-ru-vosk-2025-08-16/encoder.onnx"
@@ -14,15 +10,20 @@ models:
     joiner: "../Models/sherpa-onnx-streaming-zipformer-small-ru-vosk-2025-08-16/joiner.onnx"
     tokens: "../Models/sherpa-onnx-streaming-zipformer-small-ru-vosk-2025-08-16/tokens.txt"
     model_type: "zipformer2"
+  gigaam:
+    encoder: "../Models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16/encoder.int8.onnx"
+    decoder: "../Models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16/decoder.onnx"
+    joiner: "../Models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16/joiner.onnx"
+    tokens: "../Models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16/tokens.txt"
+    num_threads: 4
 
-  punct:
-    # model_path: "../Models/RuPunct/small/"
-    # onnx_path: "../Models/rupunct_onnx/RuPunct_small.onnx"
-    model_path: "../Models/rupunct_onnx/big/"
-    onnx_path: "../Models/rupunct_onnx/big/model.onnx"
-
-  classifier:
-    model_path: "../Models/distilbert-base-uncased-finetuned-sst"
+command:
+  enabled: true
+  onnx_path: "../Models/multilingual-e5-small/onnx/model.onnx"
+  tokenizer_path: "../Models/multilingual-e5-small/tokenizer.json"
+  onnx_lib_path: "/home/michael/go/ort/lib/libonnxruntime.so"
+  threshold: 0.92
+  commands_json: "./data/commands.json"
 
 decoding:
   num_threads: 1
