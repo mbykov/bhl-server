@@ -10,8 +10,8 @@
     "external": true
   },
   {
-    "name": "undo",
-    "synonyms": ["отмена", "отмени"]
+    "name": "undoPhrase",
+    "synonyms": ["отмена текста", "отмени текст"]
   },
   {
     "name": "addParagraph",
@@ -36,6 +36,10 @@
   {
     "name": "undoCommand",
     "synonyms": ["отмени команду", "отмени действие"]
+  },
+  {
+    "name": "rerunCommand",
+    "synonyms": ["выполни команду", "выполни действие"]
   },
   {
     "name": "recordStart",

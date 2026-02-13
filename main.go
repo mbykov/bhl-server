@@ -67,8 +67,7 @@ func main() {
 	addr := ":" + config.Server.Port
 	useSSL := checkSSLCertificates(config.Server.Cert, config.Server.Key)
 
-	serverCtx, stop := signal.NotifyContext(context.Background(),
-		syscall.SIGINT, syscall.SIGTERM)
+	serverCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	if useSSL {

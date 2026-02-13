@@ -295,7 +295,7 @@ func (s *HybridSession) handleEndpoint(voskText string) {
 				"score":    cmd.Score,
 				"segment":  segment,
 				"type":     "command",
-                "text":     "⚡ " + cmd.Name, // временно для отладки
+                "text":     cmd.Name, // "⚡ " + cmd.Name, // временно для отладки
 			})
 			s.Logger.Info("AFTER command send",
 				"name", cmd.Name,
