@@ -3,36 +3,8 @@ server:
   cert: "../../../bhl/.cert/combined-tma-cert.pem"
   key: "../../../bhl/.cert/tma.local+2-key.pem"
 
-models:
-  vosk:
-    encoder: "../Models/sherpa-onnx-streaming-zipformer-small-ru-vosk-2025-08-16/encoder.onnx"
-    decoder: "../Models/sherpa-onnx-streaming-zipformer-small-ru-vosk-2025-08-16/decoder.onnx"
-    joiner: "../Models/sherpa-onnx-streaming-zipformer-small-ru-vosk-2025-08-16/joiner.onnx"
-    tokens: "../Models/sherpa-onnx-streaming-zipformer-small-ru-vosk-2025-08-16/tokens.txt"
-    model_type: "zipformer2"
-  gigaam:
-    encoder: "../Models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16/encoder.int8.onnx"
-    decoder: "../Models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16/decoder.onnx"
-    joiner: "../Models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16/joiner.onnx"
-    tokens: "../Models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16/tokens.txt"
-    num_threads: 4
-
-command:
-  enabled: true
-  onnx_path: "../Models/multilingual-e5-small/onnx/model.onnx"
-  tokenizer_path: "../Models/multilingual-e5-small/tokenizer.json"
-  onnx_lib_path: "/home/michael/go/ort/lib/libonnxruntime.so"
-  threshold: 0.92
-  commands_json: "./data/commands.json"
-
-decoding:
-  num_threads: 1
-  provider: "cpu"
-  decoding_method: "greedy_search"
-  max_active_paths: 4
-
-endpoint:
-  enable: true
-  rule1_min_trailing_silence: 1.2
-  rule2_min_trailing_silence: 0.6
-  rule3_min_utterance_length: 20
+vosk:
+  model_path: "../Models/vosk-model-streaming-ru"
+  sample_rate: 16000
+  feature_dim: 80
+  chunk_ms: 100
