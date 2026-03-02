@@ -4,33 +4,27 @@ import (
     "fmt"
     "log"
     "sync"
-    "os"
+    "time"
 
     "github.com/mbykov/bhl-vosk-sherpa-go/vosk"
 )
 
 type VoskProcessor struct {
-    module *vosk.ASRModule
-    cfg    *Config
-    mu     sync.Mutex
-    id     string // для идентификации сессии
+    module     *vosk.ASRModule
+    cfg        *Config
+    mu         sync.Mutex
+    id         string
+    audioBytes int64
+    lastLog    time.Time
 }
 
 func NewVoskProcessor(cfg *Config, sessionID string) (*VoskProcessor, error) {
     log.Printf("[%s] 🔧 Инициализация VOSK с моделью: %s", sessionID, cfg.Vosk.ModelPath)
 
-    // Проверим, что файлы модели существуют
-    encoderPath := cfg.Vosk.ModelPath + "/am-onnx/encoder.onnx"
-    if _, err := os.Stat(encoderPath); err != nil {
-        return nil, fmt.Errorf("encoder.onnx not found: %w", err)
-    }
-    log.Printf("[%s] ✅ encoder.onnx найден", sessionID)
-
     voskCfg := vosk.Config{
-        ModelPath:   cfg.Vosk.ModelPath,
-        SampleRate:  cfg.Vosk.SampleRate,
-        FeatureDim:  cfg.Vosk.FeatureDim,
-        ChunkMs:     cfg.Vosk.ChunkMs,
+        ModelPath:  cfg.Vosk.ModelPath,
+        SampleRate: cfg.Vosk.SampleRate,
+        FeatureDim: cfg.Vosk.FeatureDim,
     }
 
     module, err := vosk.New(voskCfg)
@@ -41,9 +35,10 @@ func NewVoskProcessor(cfg *Config, sessionID string) (*VoskProcessor, error) {
     log.Printf("[%s] ✅ VOSK инициализирован", sessionID)
 
     return &VoskProcessor{
-        module: module,
-        cfg:    cfg,
-        id:     sessionID,
+        module:  module,
+        cfg:     cfg,
+        id:      sessionID,
+        lastLog: time.Now(),
     }, nil
 }
 
@@ -51,18 +46,16 @@ func (v *VoskProcessor) WriteAudio(pcm []byte) error {
     v.mu.Lock()
     defer v.mu.Unlock()
 
-    log.Printf("[%s] 📥 Запись аудио: %d байт", v.id, len(pcm))
+    v.audioBytes += int64(len(pcm))
 
-    err := v.module.WriteAudio(pcm)
-    if err != nil {
-        log.Printf("[%s] ❌ Ошибка записи аудио: %v", v.id, err)
-        return err
+    // Логировать каждые 10 секунд или 1 МБ
+    if time.Since(v.lastLog) > 10*time.Second || v.audioBytes > 1024*1024 {
+        log.Printf("[%s] 📊 Vosk обработал всего: %.2f KB", v.id, float64(v.audioBytes)/1024)
+        v.lastLog = time.Now()
+        v.audioBytes = 0
     }
 
-    // Принудительно вызываем декодирование после каждого чанка
-    // (в vosk-go это должно делаться автоматически, но на всякий случай)
-
-    return nil
+    return v.module.WriteAudio(pcm)
 }
 
 func (v *VoskProcessor) GetResult() (vosk.Result, error) {
@@ -71,16 +64,54 @@ func (v *VoskProcessor) GetResult() (vosk.Result, error) {
 
     result, err := v.module.GetResult()
     if err != nil {
-        log.Printf("[%s] ❌ Ошибка получения результата: %v", v.id, err)
         return vosk.Result{}, err
     }
 
     if result.Text != "" {
-        log.Printf("[%s] 📝 Результат VOSK: '%s' (финал: %v)", v.id, result.Text, result.IsFinal)
+        log.Printf("[%s] 📝 VOSK_go %s: %q",
+            v.id,
+            map[bool]string{true: "final", false: "interim"}[result.IsFinal],
+            result.Text)
     }
 
     return result, nil
 }
+
+// Удаляем метод Reset - он не нужен, используем флаг в сессии
+
+func (v *VoskProcessor) Reset() error {
+    v.mu.Lock()
+    defer v.mu.Unlock()
+
+    log.Printf("[%s] 🔄 Принудительный сброс Vosk", v.id)
+
+    // Создаём новую сессию Vosk через существующий механизм
+    // В зависимости от вашего модуля vosk-sherpa-go
+
+    // Вариант 1: если есть метод Reset
+    if resetter, ok := interface{}(v.module).(interface{ Reset() error }); ok {
+        return resetter.Reset()
+    }
+
+    // Вариант 2: пересоздаём модуль
+    voskCfg := vosk.Config{
+        ModelPath:  v.cfg.Vosk.ModelPath,
+        SampleRate: v.cfg.Vosk.SampleRate,
+        FeatureDim: v.cfg.Vosk.FeatureDim,
+    }
+
+    newModule, err := vosk.New(voskCfg)
+    if err != nil {
+        return fmt.Errorf("не удалось пересоздать Vosk: %w", err)
+    }
+
+    // Закрываем старый
+    v.module.Close()
+    v.module = newModule
+
+    return nil
+}
+
 
 func (v *VoskProcessor) Close() {
     log.Printf("[%s] 🔚 Закрытие VOSK", v.id)

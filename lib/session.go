@@ -3,28 +3,25 @@ package lib
 import (
     "encoding/json"
     "log"
-    "sync"
+    "strings"
     "time"
-)
 
-const (
-    finalTimeout = 800 * time.Millisecond // ждём 0.8 секунды после последнего промежутка
+    "github.com/mbykov/bhl-command-go"
 )
 
 type Session struct {
-    id              string
-    vosk            *VoskProcessor
-    sendChan        chan<- []byte
-    stopChan        chan struct{}
-    mu              sync.Mutex
+    id          string
+    vosk        *VoskProcessor
+    sendChan    chan<- []byte
+    models      *Models
+    cfg         *Config
 
-    lastInterimText string
-    lastFinalText   string
-    lastInterimTime time.Time
-    pendingFinal    string // текст, который ждёт подтверждения
+    // Текущая фраза
+    currentAudio []byte
+    phraseStart  time.Time
 }
 
-func NewSession(id string, sendChan chan<- []byte, cfg *Config) (*Session, error) {
+func NewSession(id string, sendChan chan<- []byte, cfg *Config, models *Models) (*Session, error) {
     log.Printf("[%s] 🆕 Создание новой сессии", id)
 
     vosk, err := NewVoskProcessor(cfg, id)
@@ -33,73 +30,99 @@ func NewSession(id string, sendChan chan<- []byte, cfg *Config) (*Session, error
     }
 
     s := &Session{
-        id:              id,
-        vosk:            vosk,
-        sendChan:        sendChan,
-        stopChan:        make(chan struct{}),
-        lastInterimTime: time.Now(),
+        id:         id,
+        vosk:       vosk,
+        sendChan:   sendChan,
+        models:     models,
+        cfg:        cfg,
+        currentAudio: make([]byte, 0),
     }
 
-    go s.processResults()
+    log.Printf("[%s] ✅ Сессия инициализирована", id)
     return s, nil
 }
 
 func (s *Session) HandleAudio(pcm []byte) {
-    s.vosk.WriteAudio(pcm)
-}
-
-func (s *Session) processResults() {
-    ticker := time.NewTicker(100 * time.Millisecond)
-    defer ticker.Stop()
-
-    for {
-        select {
-        case <-s.stopChan:
-            return
-        case <-ticker.C:
-            s.mu.Lock()
-
-            result, err := s.vosk.GetResult()
-            now := time.Now()
-
-            if err == nil && result.Text != "" {
-                // Есть новый текст от VOSK
-                if result.IsFinal {
-                    // ФИНАЛ от VOSK
-                    if result.Text != s.lastFinalText {
-                        s.lastFinalText = result.Text
-                        s.pendingFinal = ""
-                        log.Printf("[%s] ✅ %s", s.id, result.Text)
-                        s.sendMessage("final", result.Text)
-                    }
-                } else {
-                    // ПРОМЕЖУТОЧНЫЙ - обновляем время и текст
-                    if result.Text != s.lastInterimText {
-                        s.lastInterimText = result.Text
-                        s.lastInterimTime = now
-                        s.pendingFinal = result.Text
-                        log.Printf("[%s] 🔄 %s", s.id, result.Text)
-                        s.sendMessage("intermediate", result.Text)
-                    }
-                }
-            }
-
-            // Проверяем, не пора ли отправить принудительный финал
-            if s.pendingFinal != "" && now.Sub(s.lastInterimTime) > finalTimeout {
-                if s.pendingFinal != s.lastFinalText {
-                    s.lastFinalText = s.pendingFinal
-                    log.Printf("[%s] ⏱️ %s", s.id, s.pendingFinal)
-                    s.sendMessage("final", s.pendingFinal)
-                }
-                s.pendingFinal = ""
-            }
-
-            s.mu.Unlock()
-        }
+    // Если это начало новой фразы
+    if len(s.currentAudio) == 0 {
+        s.phraseStart = time.Now()
+        log.Printf("[%s] 🎤 Начало новой фразы", s.id)
     }
+
+    // Накапливаем аудио
+    s.currentAudio = append(s.currentAudio, pcm...)
+
+    // Отправляем в Vosk
+    s.vosk.WriteAudio(pcm)
+
+    // Проверяем результат
+    s.checkVosk()
 }
 
-func (s *Session) sendMessage(msgType, text string) {
+func (s *Session) checkVosk() {
+    result, err := s.vosk.GetResult()
+    if err != nil || result.Text == "" {
+        return
+    }
+
+    text := strings.TrimSpace(result.Text)
+    if text == "" {
+        return
+    }
+
+    if !result.IsFinal {
+        // ПРОМЕЖУТОЧНЫЙ - просто шлем в браузер
+        s.sendToBrowser("interim", text)
+        log.Printf("[%s] 🔄 Interim: %q", s.id, text)
+        return
+    }
+
+    // ФИНАЛ! Обрабатываем результат
+    log.Printf("[%s] 🎯 Final: %q", s.id, text)
+
+    // Сохраняем аудио для этой фразы (позже отправим в Giga)
+    audioForPhrase := s.currentAudio
+    s.currentAudio = make([]byte, 0) // начинаем новую фразу
+
+    // Проверяем, не команда ли это
+    cmd := s.findCommand(text)
+    if cmd != nil {
+        // Это команда
+        s.sendCommand(cmd, text)
+        log.Printf("[%s] ✅ Команда: %s", s.id, cmd.Name)
+    } else {
+        // Обычный текст
+        s.sendToBrowser("final", text)
+        log.Printf("[%s] 📝 Текст: %s", s.id, text)
+    }
+
+    // Замеряем время обработки фразы
+    log.Printf("[%s] ⏱️ Фраза обработана за %v (аудио: %d байт)",
+        s.id, time.Since(s.phraseStart), len(audioForPhrase))
+
+    // TODO: отправить audioForPhrase в GigaAM для пунктуации
+}
+
+func (s *Session) findCommand(text string) *command.CommandMapping {
+    if s.models.Command == nil || !s.cfg.Command.Enabled {
+        return nil
+    }
+
+    words := strings.Fields(text)
+    if len(words) < s.cfg.Command.MinWords {
+        return nil
+    }
+
+    cmd, err := s.models.Command.FindCommand(text)
+    if err != nil {
+        log.Printf("[%s] ⚠️ Ошибка поиска команды: %v", s.id, err)
+        return nil
+    }
+
+    return cmd
+}
+
+func (s *Session) sendToBrowser(msgType, text string) {
     msg := map[string]string{
         "type": msgType,
         "text": text,
@@ -109,10 +132,25 @@ func (s *Session) sendMessage(msgType, text string) {
     select {
     case s.sendChan <- data:
     default:
+        log.Printf("[%s] ⚠️ Канал отправки переполнен", s.id)
     }
 }
 
+func (s *Session) sendCommand(cmd *command.CommandMapping, text string) {
+    msg := map[string]interface{}{
+        "type": "command",
+        "text": text,
+        "name": cmd.Name,
+    }
+    if cmd.Score > 0 {
+        msg["score"] = cmd.Score
+    }
+
+    data, _ := json.Marshal(msg)
+    s.sendChan <- data
+}
+
 func (s *Session) Close() {
-    close(s.stopChan)
+    log.Printf("[%s] 🔚 Закрытие сессии", s.id)
     s.vosk.Close()
 }

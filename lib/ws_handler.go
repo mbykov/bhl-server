@@ -10,24 +10,7 @@ import (
     "github.com/gorilla/websocket"
 )
 
-type WSHandler struct {
-    upgrader websocket.Upgrader
-    sessions sync.Map
-    cfg      *Config
-}
-
-func NewWSHandler(cfg *Config) *WSHandler {
-    log.Println("🔧 Создание WebSocket обработчика")
-    return &WSHandler{
-        upgrader: websocket.Upgrader{
-            CheckOrigin: func(r *http.Request) bool { return true },
-            ReadBufferSize:  1024 * 1024,
-            WriteBufferSize: 1024 * 1024,
-        },
-        cfg: cfg,
-    }
-}
-
+// Эти функции были удалены, но они нужны
 func bytesToFloat32Slice(b []byte) []float32 {
     if len(b)%4 != 0 {
         return nil
@@ -50,20 +33,40 @@ func float32ToInt16PCM(samples []float32) []byte {
     return pcm
 }
 
+type WSHandler struct {
+    upgrader websocket.Upgrader
+    sessions sync.Map
+    cfg      *Config
+    models   *Models
+}
+
+func NewWSHandler(cfg *Config, models *Models) *WSHandler {
+    log.Println("🔧 Создание WebSocket обработчика")
+    return &WSHandler{
+        upgrader: websocket.Upgrader{
+            CheckOrigin: func(r *http.Request) bool { return true },
+            ReadBufferSize:  1024 * 1024,
+            WriteBufferSize: 1024 * 1024,
+        },
+        cfg:    cfg,
+        models: models,
+    }
+}
+
 func (h *WSHandler) Handle(w http.ResponseWriter, r *http.Request) {
     sessionID := r.RemoteAddr
-    log.Printf("📡 Новое WebSocket соединение от %s", sessionID)
+    log.Printf("[%s] 📡 Новое WebSocket соединение", sessionID)
 
     conn, err := h.upgrader.Upgrade(w, r, nil)
     if err != nil {
-        log.Printf("❌ WebSocket upgrade error: %v", err)
+        log.Printf("[%s] ❌ WebSocket upgrade error: %v", sessionID, err)
         return
     }
     defer conn.Close()
 
     sendChan := make(chan []byte, 100)
 
-    sess, err := NewSession(sessionID, sendChan, h.cfg)
+    sess, err := NewSession(sessionID, sendChan, h.cfg, h.models)
     if err != nil {
         log.Printf("[%s] ❌ Failed to create session: %v", sessionID, err)
         return

@@ -8,22 +8,36 @@ import (
     "syscall"
     "time"
 
-    "bhl-server/lib"
+    "bhl-server/lib"  // Это должен быть правильный путь к модулю
 )
 
 func main() {
-    log.Println("🚀 Запуск сервера...")
+    startTime := time.Now()
+    log.Println("🚀 Запуск сервера голосового дневника...")
 
+    // Шаг 1: Загрузка конфига
+    log.Println("📁 Шаг 1/4: Загрузка конфигурации...")
     cfg, err := lib.LoadConfig("config.yaml")
     if err != nil {
         log.Fatal("❌ Ошибка загрузки config.yaml:", err)
     }
-    log.Println("✅ Конфиг загружен")
+    log.Printf("   ✅ Конфиг загружен: порт %s", cfg.Server.Port)
 
-    wsHandler := lib.NewWSHandler(cfg)
+    // Шаг 2: Загрузка моделей
+    log.Println("🤖 Шаг 2/4: Инициализация моделей...")
+    models, err := lib.LoadModels(cfg)
+    if err != nil {
+        log.Fatal("❌ Ошибка загрузки моделей:", err)
+    }
+    defer models.Close()
+
+    // Шаг 3: Создание WebSocket обработчика с моделями
+    log.Println("🔧 Шаг 3/4: Настройка WebSocket обработчика...")
+    wsHandler := lib.NewWSHandler(cfg, models)
     http.HandleFunc("/", wsHandler.Handle)
 
-    log.Printf("🌐 Сервер слушает порт %s с TLS", cfg.Server.Port)
+    // Шаг 4: Запуск HTTPS сервера
+    log.Println("🌐 Шаг 4/4: Запуск HTTPS сервера...")
 
     go func() {
         if err := http.ListenAndServeTLS(":"+cfg.Server.Port,
@@ -32,7 +46,9 @@ func main() {
         }
     }()
 
-    log.Println("✅ Сервер успешно запущен")
+    totalTime := time.Since(startTime)
+    log.Printf("✅ Сервер полностью запущен за %v", totalTime)
+    log.Println("📝 Ожидание подключений...")
 
     // Graceful shutdown
     quit := make(chan os.Signal, 1)
