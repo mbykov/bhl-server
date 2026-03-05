@@ -92,7 +92,8 @@ func (s *Session) checkVosk() {
         log.Printf("[%s] ✅ Команда: %s", s.id, cmd.Name)
     } else {
         // Обычный текст
-        s.sendToBrowser("final", text)
+        // s.sendToBrowser("final", text)
+        go s.processWithGigaAM(text, audioForPhrase)
         log.Printf("[%s] 📝 Текст: %s", s.id, text)
     }
 
@@ -101,6 +102,29 @@ func (s *Session) checkVosk() {
         s.id, time.Since(s.phraseStart), len(audioForPhrase))
 
     // TODO: отправить audioForPhrase в GigaAM для пунктуации
+}
+
+// Добавить метод:
+func (s *Session) processWithGigaAM(text string, audio []byte) {
+    if s.models.GigaAM == nil {
+        // Если GigaAM не загружен, просто отправляем текст
+        s.sendToBrowser("final", text)
+        return
+    }
+
+    log.Printf("[%s] 🔄 Отправка в GigaAM (текст: %q, аудио: %d байт)",
+        s.id, text, len(audio))
+
+    // Используем ProcessAudio вместо ProcessText!
+    result, err := s.models.GigaAM.ProcessAudio(audio)
+    if err != nil {
+        log.Printf("[%s] ❌ Ошибка GigaAM: %v", s.id, err)
+        s.sendToBrowser("final", text)
+        return
+    }
+
+    s.sendToBrowser("final", result.Text)
+    log.Printf("[%s] ✅ Отправлен результат GigaAM: %q", s.id, result.Text)
 }
 
 func (s *Session) findCommand(text string) *command.CommandMapping {

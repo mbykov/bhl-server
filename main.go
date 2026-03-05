@@ -23,6 +23,15 @@ func main() {
     }
     log.Printf("   ✅ Конфиг загружен: порт %s", cfg.Server.Port)
 
+    // Шаг 1.5: Инициализация ONNX Runtime (один раз для всех моделей)
+    log.Println("⚙️ Инициализация ONNX Runtime...")
+    ort.SetSharedLibraryPath("/home/michael/go/ort/lib/libonnxruntime.so")
+    if err := ort.InitializeEnvironment(); err != nil {
+        log.Fatal("❌ Ошибка инициализации ONNX Runtime:", err)
+    }
+    defer ort.DestroyEnvironment()
+    log.Println("   ✅ ONNX Runtime инициализирован")
+
     // Шаг 2: Загрузка моделей
     log.Println("🤖 Шаг 2/4: Инициализация моделей...")
     models, err := lib.LoadModels(cfg)

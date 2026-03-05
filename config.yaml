@@ -11,16 +11,21 @@ vosk:
 
 command:
   enabled: true
-  model_path: "../Models/multilingual-e5-small/onnx/model.onnx"
-  tokenizer_path: "../Models/multilingual-e5-small/tokenizer.json"
-  ort_lib_path: "/home/michael/go/ort/lib/libonnxruntime.so"
-  commands_path: "./data/commands.json"
-  threshold: 0.92
+  commands_file: "./data/commands.json"
   min_words: 2
+  model:
+    onnx_path: "../Models/multilingual-e5-small/onnx/model.onnx"
+    tokenizer_path: "../Models/multilingual-e5-small/tokenizer.json"
+    lib_path: "/home/michael/go/ort/lib/libonnxruntime.so"
+    threshold: 0.92
 
-giga:
-  enabled: false  # пока заглушка
-  model_path: "../Models/gigaam"  # для будущего использования
+gigaam:
+  enabled: true
+  model_path: "/home/michael/LLM/bhl/servers/Models/gg_v3_e2e_rnnt/onnx_e2e_rnnt"
+  sample_rate: 16000
+  feature_dim: 64
+  num_threads: 2
+  provider: "cpu"
 
 qwen:
   enabled: false  # пока заглушка

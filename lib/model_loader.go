@@ -3,68 +3,90 @@ package lib
 import (
     "fmt"
     "log"
-    "time"
 
-    "github.com/mbykov/bhl-command-go" // импортируем ваш модуль
+    "github.com/mbykov/bhl-command-go"
+    "github.com/mbykov/bhl-vosk-sherpa-go/vosk"
+    "github.com/mbykov/bhl-gigaam-sherpa-go"
 )
 
 type Models struct {
+    Vosk   *vosk.ASRModule
     Command *command.SearchEngine
-    // Giga и Qwen добавим позже
+    GigaAM *gigaam.GigaAMModule
 }
 
 func LoadModels(cfg *Config) (*Models, error) {
-    log.Println("🔄 Загрузка моделей...")
-    startTime := time.Now()
-
     models := &Models{}
 
-    // 1. Загрузка Command Search Engine
-    if cfg.Command.Enabled {
-        log.Println("  📦 Загрузка модели команд (multilingual-e5-small)...")
-        cmdStart := time.Now()
+    // Vosk всегда загружаем (он есть в конфиге)
+    log.Println("  🎤 Загрузка Vosk модуля...")
+    voskCfg := vosk.Config{
+        ModelPath:  cfg.Vosk.ModelPath,
+        SampleRate: cfg.Vosk.SampleRate,
+        FeatureDim: cfg.Vosk.FeatureDim,
+        ChunkMs:    cfg.Vosk.ChunkMs,
+    }
 
-        engine, err := command.NewSearchEngine(
-            cfg.Command.ModelPath,
-            cfg.Command.TokenizerPath,
-            cfg.Command.OrtLibPath,
-            cfg.Command.Threshold,
+    voskModule, err := vosk.New(voskCfg)
+    if err != nil {
+        return nil, fmt.Errorf("ошибка загрузки Vosk: %v", err)
+    }
+    models.Vosk = voskModule
+    log.Println("  ✅ Vosk модуль загружен")
+
+    // Загрузка Command Engine (если включен)
+    if cfg.Command.Enabled {
+        log.Println("  🔧 Загрузка Command модуля...")
+
+        cmdEngine, err := command.NewSearchEngine(
+            cfg.Command.Model.OnnxPath,
+            cfg.Command.Model.TokenizerPath,
+            cfg.Command.Model.LibPath,
+            cfg.Command.Model.Threshold,
         )
         if err != nil {
-            return nil, fmt.Errorf("ошибка загрузки command model: %w", err)
+            return nil, fmt.Errorf("ошибка загрузки Command: %v", err)
         }
 
-        // Загрузка команд и вычисление эмбеддингов
-        log.Printf("  📖 Загрузка команд из %s...", cfg.Command.CommandsPath)
-        if err := engine.LoadCommands(cfg.Command.CommandsPath); err != nil {
-            engine.Close()
-            return nil, fmt.Errorf("ошибка загрузки команд: %w", err)
+        // Загружаем команды из JSON
+        if err := cmdEngine.LoadCommands("./data/commands.json"); err != nil {
+            return nil, fmt.Errorf("ошибка загрузки команд: %v", err)
         }
 
-        models.Command = engine
-        log.Printf("  ✅ Command model загружена за %v", time.Since(cmdStart))
-    } else {
-        log.Println("  ⏭️ Command model отключена в конфиге")
+        models.Command = cmdEngine
+        log.Println("  ✅ Command модуль загружен")
     }
 
-    // 2. Заглушки для Giga и Qwen (позже)
-    if cfg.Giga.Enabled {
-        log.Println("  📦 Загрузка GigaAM (пунктуация)...")
-        // TODO: реализовать позже
+    // Загрузка GigaAM (если включен)
+    if cfg.GigaAM.Enabled {
+        log.Println("  📝 Загрузка GigaAM модуля...")
+        gigaamCfg := gigaam.Config{
+            ModelPath:  cfg.GigaAM.ModelPath,
+            SampleRate: cfg.GigaAM.SampleRate,
+            FeatureDim: cfg.GigaAM.FeatureDim,
+            NumThreads: cfg.GigaAM.NumThreads,
+            Provider:   cfg.GigaAM.Provider,
+        }
+
+        gigaamModule, err := gigaam.New(gigaamCfg)
+        if err != nil {
+            return nil, fmt.Errorf("ошибка загрузки GigaAM: %v", err)
+        }
+        models.GigaAM = gigaamModule
+        log.Println("  ✅ GigaAM модуль загружен")
     }
 
-    if cfg.Qwen.Enabled {
-        log.Println("  📦 Загрузка Qwen (выполнение команд)...")
-        // TODO: реализовать позже
-    }
-
-    log.Printf("✅ Все модели загружены за %v", time.Since(startTime))
     return models, nil
 }
 
 func (m *Models) Close() {
+    if m.Vosk != nil {
+        m.Vosk.Close()
+    }
     if m.Command != nil {
         m.Command.Close()
     }
-    // TODO: закрыть Giga и Qwen
+    if m.GigaAM != nil {
+        m.GigaAM.Close()
+    }
 }

@@ -13,36 +13,35 @@ type Config struct {
     } `yaml:"server"`
 
     Vosk struct {
-        ModelPath   string `yaml:"model_path"`
-        SampleRate  int    `yaml:"sample_rate"`
-        FeatureDim  int    `yaml:"feature_dim"`
-        ChunkMs     int    `yaml:"chunk_ms"`
+        ModelPath  string `yaml:"model_path"`
+        TestWav    string `yaml:"test_wav"`
+        SampleRate int    `yaml:"sample_rate"`
+        FeatureDim int    `yaml:"feature_dim"`
+        ChunkMs    int    `yaml:"chunk_ms"`
+        // Enabled нет в структуре!
     } `yaml:"vosk"`
 
     Command struct {
-        Enabled      bool    `yaml:"enabled"`
-        ModelPath    string  `yaml:"model_path"`
-        TokenizerPath string `yaml:"tokenizer_path"`
-        OrtLibPath   string  `yaml:"ort_lib_path"`
-        CommandsPath string  `yaml:"commands_path"`
-        Threshold    float32 `yaml:"threshold"`
-        MinWords     int     `yaml:"min_words"`
+        Enabled      bool     `yaml:"enabled"`
+        CommandsFile string   `yaml:"commands_file"`
+        MinWords     int      `yaml:"min_words"`
+        Model struct {
+            OnnxPath     string  `yaml:"onnx_path"`
+            TokenizerPath string `yaml:"tokenizer_path"`
+            LibPath      string  `yaml:"lib_path"`
+            Threshold    float32 `yaml:"threshold"`
+        } `yaml:"model"`
     } `yaml:"command"`
 
-    Giga struct {
-        Enabled   bool   `yaml:"enabled"`
-        ModelPath string `yaml:"model_path"`
-    } `yaml:"giga"`
 
-    Qwen struct {
-        Enabled   bool   `yaml:"enabled"`
-        ModelPath string `yaml:"model_path"`
-    } `yaml:"qwen"`
-
-    Logging struct {
-        Verbose bool `yaml:"verbose"`
-        Profile bool `yaml:"profile"`
-    } `yaml:"logging"`
+    GigaAM struct {
+        Enabled    bool   `yaml:"enabled"`
+        ModelPath  string `yaml:"model_path"`
+        SampleRate int    `yaml:"sample_rate"`
+        FeatureDim int    `yaml:"feature_dim"`
+        NumThreads int    `yaml:"num_threads"`
+        Provider   string `yaml:"provider"`
+    } `yaml:"gigaam"`
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -50,7 +49,12 @@ func LoadConfig(path string) (*Config, error) {
     if err != nil {
         return nil, err
     }
+
     var cfg Config
     err = yaml.Unmarshal(data, &cfg)
-    return &cfg, err
+    if err != nil {
+        return nil, err
+    }
+
+    return &cfg, nil
 }
