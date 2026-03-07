@@ -9,6 +9,7 @@ import (
     "time"
 
     "bhl-server/lib"  // Это должен быть правильный путь к модулю
+    ort "github.com/yalue/onnxruntime_go"
 )
 
 func main() {
@@ -39,6 +40,7 @@ func main() {
         log.Fatal("❌ Ошибка загрузки моделей:", err)
     }
     defer models.Close()
+    defer ort.DestroyEnvironment()
 
     // Шаг 3: Создание WebSocket обработчика с моделями
     log.Println("🔧 Шаг 3/4: Настройка WebSocket обработчика...")

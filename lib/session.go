@@ -5,8 +5,10 @@ import (
     "log"
     "strings"
     "time"
+    "fmt"
+    "os"
 
-    "github.com/mbykov/bhl-command-go"
+    "github.com/mbykov/command-go-levenshtein"
 )
 
 type Session struct {
@@ -112,22 +114,38 @@ func (s *Session) processWithGigaAM(text string, audio []byte) {
         return
     }
 
+    // ВРЕМЕННО: сохраняем проблемное аудио
+    if strings.Contains(text, "хренушки") { // или любой маркер
+        tmpFile := fmt.Sprintf("/tmp/gigaam_debug_%d.raw", time.Now().UnixNano())
+        os.WriteFile(tmpFile, audio, 0644)
+        log.Printf("[%s] 💾 Сохранено проблемное аудио: %s", s.id, tmpFile)
+    }
+
+
     log.Printf("[%s] 🔄 Отправка в GigaAM (текст: %q, аудио: %d байт)",
         s.id, text, len(audio))
 
     // Используем ProcessAudio вместо ProcessText!
     result, err := s.models.GigaAM.ProcessAudio(audio)
-    if err != nil {
-        log.Printf("[%s] ❌ Ошибка GigaAM: %v", s.id, err)
+    if err != nil || strings.TrimSpace(result.Text) == "" {
+        // Сохраняем даже при ошибке или пустом результате
+        tmpFile := fmt.Sprintf("/tmp/gigaam_debug_error_%d.raw", time.Now().UnixNano())
+        os.WriteFile(tmpFile, audio, 0644)
+        log.Printf("[%s] 💾 Сохранено проблемное аудио (ошибка/пусто): %s", s.id, tmpFile)
+
+        if err != nil {
+            log.Printf("[%s] ❌ Ошибка GigaAM: %v", s.id, err)
+        }
         s.sendToBrowser("final", text)
         return
     }
 
     s.sendToBrowser("final", result.Text)
+
     log.Printf("[%s] ✅ Отправлен результат GigaAM: %q", s.id, result.Text)
 }
 
-func (s *Session) findCommand(text string) *command.CommandMapping {
+func (s *Session) findCommand(text string) *command.CommandDefinition {
     if s.models.Command == nil || !s.cfg.Command.Enabled {
         return nil
     }
@@ -137,13 +155,15 @@ func (s *Session) findCommand(text string) *command.CommandMapping {
         return nil
     }
 
-    cmd, err := s.models.Command.FindCommand(text)
-    if err != nil {
-        log.Printf("[%s] ⚠️ Ошибка поиска команды: %v", s.id, err)
+    cmdName, external := s.models.Command.Resolve(text)
+    _ = external // игнорируем, так как пока не используем
+
+    if cmdName == "" {
         return nil
     }
 
-    return cmd
+    cmdDef := s.models.Command.GetCommand(cmdName)
+    return cmdDef
 }
 
 func (s *Session) sendToBrowser(msgType, text string) {
@@ -160,14 +180,15 @@ func (s *Session) sendToBrowser(msgType, text string) {
     }
 }
 
-func (s *Session) sendCommand(cmd *command.CommandMapping, text string) {
+func (s *Session) sendCommand(cmd *command.CommandDefinition, text string) {
     msg := map[string]interface{}{
         "type": "command",
         "text": text,
         "name": cmd.Name,
     }
-    if cmd.Score > 0 {
-        msg["score"] = cmd.Score
+    // Поле External есть и в CommandDefinition
+    if cmd.External {
+        msg["external"] = true
     }
 
     data, _ := json.Marshal(msg)

@@ -9,7 +9,7 @@ vosk:
   feature_dim: 80
   chunk_ms: 100
 
-command:
+command_:
   enabled: true
   commands_file: "./data/commands.json"
   min_words: 2
@@ -18,6 +18,12 @@ command:
     tokenizer_path: "../Models/multilingual-e5-small/tokenizer.json"
     lib_path: "/home/michael/go/ort/lib/libonnxruntime.so"
     threshold: 0.92
+
+command:
+  enabled: true
+  commands_file: "./data/commands.json"
+  min_words: 2
+  threshold: 3  # порог расстояния Левенштейна (0 = точное совпадение)
 
 gigaam:
   enabled: true

@@ -22,15 +22,10 @@ type Config struct {
     } `yaml:"vosk"`
 
     Command struct {
-        Enabled      bool     `yaml:"enabled"`
-        CommandsFile string   `yaml:"commands_file"`
-        MinWords     int      `yaml:"min_words"`
-        Model struct {
-            OnnxPath     string  `yaml:"onnx_path"`
-            TokenizerPath string `yaml:"tokenizer_path"`
-            LibPath      string  `yaml:"lib_path"`
-            Threshold    float32 `yaml:"threshold"`
-        } `yaml:"model"`
+        Enabled      bool   `yaml:"enabled"`
+        CommandsFile string `yaml:"commands_file"`
+        MinWords     int    `yaml:"min_words"`
+        Threshold    int    `yaml:"threshold"` // добавьте это поле
     } `yaml:"command"`
 
 

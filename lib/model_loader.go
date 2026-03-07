@@ -4,14 +4,15 @@ import (
     "fmt"
     "log"
 
-    "github.com/mbykov/bhl-command-go"
+    "github.com/mbykov/command-go-levenshtein"
     "github.com/mbykov/bhl-vosk-sherpa-go/vosk"
     "github.com/mbykov/bhl-gigaam-sherpa-go"
 )
 
 type Models struct {
     Vosk   *vosk.ASRModule
-    Command *command.SearchEngine
+    // Command *command.SearchEngine
+    Command *command.CommandResolver
     GigaAM *gigaam.GigaAMModule
 }
 
@@ -36,25 +37,21 @@ func LoadModels(cfg *Config) (*Models, error) {
 
     // Загрузка Command Engine (если включен)
     if cfg.Command.Enabled {
-        log.Println("  🔧 Загрузка Command модуля...")
+        log.Println("  🔧 Загрузка Command модуля (Левенштейн)...")
 
-        cmdEngine, err := command.NewSearchEngine(
-            cfg.Command.Model.OnnxPath,
-            cfg.Command.Model.TokenizerPath,
-            cfg.Command.Model.LibPath,
-            cfg.Command.Model.Threshold,
-        )
+        // Используем порог из конфига или значение по умолчанию
+        threshold := 3
+        if cfg.Command.Threshold > 0 {
+            threshold = cfg.Command.Threshold
+        }
+
+        cmdResolver, err := command.NewResolver(cfg.Command.CommandsFile, threshold)
         if err != nil {
             return nil, fmt.Errorf("ошибка загрузки Command: %v", err)
         }
 
-        // Загружаем команды из JSON
-        if err := cmdEngine.LoadCommands("./data/commands.json"); err != nil {
-            return nil, fmt.Errorf("ошибка загрузки команд: %v", err)
-        }
-
-        models.Command = cmdEngine
-        log.Println("  ✅ Command модуль загружен")
+        models.Command = cmdResolver
+        log.Println("  ✅ Command модуль загружен (легковесный)")
     }
 
     // Загрузка GigaAM (если включен)
@@ -83,9 +80,9 @@ func (m *Models) Close() {
     if m.Vosk != nil {
         m.Vosk.Close()
     }
-    if m.Command != nil {
-        m.Command.Close()
-    }
+    // if m.Command != nil {
+    //     m.Command.Close()
+    // }
     if m.GigaAM != nil {
         m.GigaAM.Close()
     }
