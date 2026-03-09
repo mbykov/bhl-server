@@ -50,7 +50,7 @@ func (v *VoskProcessor) WriteAudio(pcm []byte) error {
 
     // Логировать каждые 10 секунд или 1 МБ
     if time.Since(v.lastLog) > 10*time.Second || v.audioBytes > 1024*1024 {
-        log.Printf("[%s] 📊 Vosk обработал всего: %.2f KB", v.id, float64(v.audioBytes)/1024)
+        // log.Printf("[%s] 📊 Vosk обработал всего: %.2f KB", v.id, float64(v.audioBytes)/1024)
         v.lastLog = time.Now()
         v.audioBytes = 0
     }

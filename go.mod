@@ -4,7 +4,7 @@ go 1.25.6
 
 require (
 	github.com/gorilla/websocket v1.5.3
-	github.com/mbykov/bhl-gigaam-sherpa-go v0.0.0-00010101000000-000000000000
+	github.com/mbykov/bhl-gigaam-go v0.0.0-00010101000000-000000000000
 	github.com/mbykov/bhl-vosk-sherpa-go v0.0.0-00010101000000-000000000000
 	github.com/mbykov/command-go-levenshtein v0.0.0-00010101000000-000000000000
 	github.com/yalue/onnxruntime_go v1.27.0
@@ -21,7 +21,7 @@ require (
 )
 
 replace (
-	github.com/mbykov/bhl-gigaam-sherpa-go => ../bhl-gigaam-sherpa-go
+	github.com/mbykov/bhl-gigaam-go => ../bhl-gigaam-go
 	github.com/mbykov/bhl-vosk-sherpa-go => ../bhl-vosk-sherpa-go
 	github.com/mbykov/command-go-levenshtein => ../command-go-levenshtein
 )

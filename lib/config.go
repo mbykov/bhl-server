@@ -30,12 +30,13 @@ type Config struct {
 
 
     GigaAM struct {
-        Enabled    bool   `yaml:"enabled"`
+        Enabled    bool   `yaml:"enabled"`   // добавьте эту строку
         ModelPath  string `yaml:"model_path"`
         SampleRate int    `yaml:"sample_rate"`
         FeatureDim int    `yaml:"feature_dim"`
         NumThreads int    `yaml:"num_threads"`
         Provider   string `yaml:"provider"`
+        // Debug      bool   `yaml:"debug"` // опционально
     } `yaml:"gigaam"`
 }
 

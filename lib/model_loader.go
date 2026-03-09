@@ -6,14 +6,13 @@ import (
 
     "github.com/mbykov/command-go-levenshtein"
     "github.com/mbykov/bhl-vosk-sherpa-go/vosk"
-    "github.com/mbykov/bhl-gigaam-sherpa-go"
+    "github.com/mbykov/bhl-gigaam-go"
 )
 
 type Models struct {
     Vosk   *vosk.ASRModule
-    // Command *command.SearchEngine
     Command *command.CommandResolver
-    GigaAM *gigaam.GigaAMModule
+    GigaAM *gigaam.GigaAMModule  // теперь новый тип
 }
 
 func LoadModels(cfg *Config) (*Models, error) {
@@ -64,7 +63,7 @@ func LoadModels(cfg *Config) (*Models, error) {
             NumThreads: cfg.GigaAM.NumThreads,
             Provider:   cfg.GigaAM.Provider,
         }
-
+        // gigaamModule, err := gigaam.New(gigaamCfg, cfg.GigaAM.Debug)
         gigaamModule, err := gigaam.New(gigaamCfg)
         if err != nil {
             return nil, fmt.Errorf("ошибка загрузки GigaAM: %v", err)

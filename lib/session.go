@@ -5,10 +5,11 @@ import (
     "log"
     "strings"
     "time"
-    "fmt"
-    "os"
+    // "fmt"
+    // "os"
 
     "github.com/mbykov/command-go-levenshtein"
+    "github.com/mbykov/bhl-gigaam-go"  // добавьте эту строку
 )
 
 type Session struct {
@@ -83,8 +84,13 @@ func (s *Session) checkVosk() {
     log.Printf("[%s] 🎯 Final: %q", s.id, text)
 
     // Сохраняем аудио для этой фразы (позже отправим в Giga)
-    audioForPhrase := s.currentAudio
-    s.currentAudio = make([]byte, 0) // начинаем новую фразу
+    // audioForPhrase := s.currentAudio
+    // s.currentAudio = make([]byte, 0) // начинаем новую фразу
+    audioForPhrase := make([]byte, len(s.currentAudio))
+    copy(audioForPhrase, s.currentAudio)
+    s.currentAudio = make([]byte, 0) // очищаем сразу
+
+    audioForPhrase = trimAudioSilence(audioForPhrase, 16000)
 
     // Проверяем, не команда ли это
     cmd := s.findCommand(text)
@@ -102,8 +108,6 @@ func (s *Session) checkVosk() {
     // Замеряем время обработки фразы
     log.Printf("[%s] ⏱️ Фраза обработана за %v (аудио: %d байт)",
         s.id, time.Since(s.phraseStart), len(audioForPhrase))
-
-    // TODO: отправить audioForPhrase в GigaAM для пунктуации
 }
 
 // Добавить метод:
@@ -114,34 +118,57 @@ func (s *Session) processWithGigaAM(text string, audio []byte) {
         return
     }
 
-    // ВРЕМЕННО: сохраняем проблемное аудио
-    if strings.Contains(text, "хренушки") { // или любой маркер
-        tmpFile := fmt.Sprintf("/tmp/gigaam_debug_%d.raw", time.Now().UnixNano())
-        os.WriteFile(tmpFile, audio, 0644)
-        log.Printf("[%s] 💾 Сохранено проблемное аудио: %s", s.id, tmpFile)
-    }
-
-
     log.Printf("[%s] 🔄 Отправка в GigaAM (текст: %q, аудио: %d байт)",
         s.id, text, len(audio))
 
     // Используем ProcessAudio вместо ProcessText!
     result, err := s.models.GigaAM.ProcessAudio(audio)
-    if err != nil || strings.TrimSpace(result.Text) == "" {
-        // Сохраняем даже при ошибке или пустом результате
-        tmpFile := fmt.Sprintf("/tmp/gigaam_debug_error_%d.raw", time.Now().UnixNano())
-        os.WriteFile(tmpFile, audio, 0644)
-        log.Printf("[%s] 💾 Сохранено проблемное аудио (ошибка/пусто): %s", s.id, tmpFile)
+
+    // ДИАГНОСТИКА: пересоздаём модуль после каждой фразы
+    oldModule := s.models.GigaAM
+    defer func() {
+        // Создаём новый модуль для следующей фразы
+
+        // newModule, err := gigaam.New(s.cfg.GigaAM)  // без второго параметра
+        gigaamConfig := gigaam.Config{
+            ModelPath:  s.cfg.GigaAM.ModelPath,
+            SampleRate: s.cfg.GigaAM.SampleRate,
+            FeatureDim: s.cfg.GigaAM.FeatureDim,
+            NumThreads: s.cfg.GigaAM.NumThreads,
+            Provider:   s.cfg.GigaAM.Provider,
+            // Debug поле не нужно, если его нет в gigaam.Config
+        }
+        newModule, err := gigaam.New(gigaamConfig)
 
         if err != nil {
-            log.Printf("[%s] ❌ Ошибка GigaAM: %v", s.id, err)
+            log.Printf("[%s] ❌ Ошибка пересоздания GigaAM: %v", s.id, err)
+            // Если не удалось создать новый, оставляем старый
+            s.models.GigaAM = oldModule
+        } else {
+            // Заменяем модуль
+            s.models.GigaAM = newModule
+            // Закрываем старый в фоне, чтобы не блокировать
+            go func(m *gigaam.GigaAMModule) {
+                m.Close()
+            }(oldModule)
+            log.Printf("[%s] 🔄 GigaAM модуль пересоздан", s.id)
         }
+    }()
+
+    if err != nil {
+        log.Printf("[%s] ❌ Ошибка GigaAM: %v", s.id, err)
+        s.sendToBrowser("final", text)
+        return
+    }
+
+    if strings.TrimSpace(result.Text) == "" {
+        // Пустой результат - используем оригинал
+        log.Printf("[%s] ⚠️ GigaAM вернул пустую строку", s.id)
         s.sendToBrowser("final", text)
         return
     }
 
     s.sendToBrowser("final", result.Text)
-
     log.Printf("[%s] ✅ Отправлен результат GigaAM: %q", s.id, result.Text)
 }
 
@@ -198,4 +225,69 @@ func (s *Session) sendCommand(cmd *command.CommandDefinition, text string) {
 func (s *Session) Close() {
     log.Printf("[%s] 🔚 Закрытие сессии", s.id)
     s.vosk.Close()
+}
+
+// trimAudioSilence обрезает тишину в начале и конце аудио
+// pcm - сырые PCM данные (16-bit, mono)
+// sampleRate - частота дискретизации
+func trimAudioSilence(pcm []byte, sampleRate int) []byte {
+    if len(pcm) < 640 { // меньше 20 мс
+        return pcm
+    }
+
+    // Параметры для анализа
+    frameSize := sampleRate / 100 // 10 мс
+    threshold := 500 // порог тишины (подберите экспериментально)
+
+    // Конвертируем в int16 для анализа
+    samples := make([]int16, len(pcm)/2)
+    for i := 0; i < len(pcm); i += 2 {
+        samples[i/2] = int16(pcm[i]) | int16(pcm[i+1])<<8
+    }
+
+    // Ищем начало речи
+    start := 0
+    for i := 0; i < len(samples)-frameSize; i += frameSize {
+        var maxAmp int16
+        for j := 0; j < frameSize; j++ {
+            amp := samples[i+j]
+            if amp < 0 {
+                amp = -amp
+            }
+            if amp > maxAmp {
+                maxAmp = amp
+            }
+        }
+        if maxAmp > int16(threshold) {
+            start = i
+            break
+        }
+    }
+
+    // Ищем конец речи
+    end := len(samples)
+    for i := len(samples) - frameSize; i > start; i -= frameSize {
+        var maxAmp int16
+        for j := 0; j < frameSize; j++ {
+            amp := samples[i+j]
+            if amp < 0 {
+                amp = -amp
+            }
+            if amp > maxAmp {
+                maxAmp = amp
+            }
+        }
+        if maxAmp > int16(threshold) {
+            end = i + frameSize
+            break
+        }
+    }
+
+    // Конвертируем обратно в []byte
+    trimmed := make([]byte, (end-start)*2)
+    for i := start; i < end; i++ {
+        trimmed[(i-start)*2] = byte(samples[i])
+        trimmed[(i-start)*2+1] = byte(samples[i] >> 8)
+    }
+    return trimmed
 }
