@@ -9,7 +9,7 @@ import (
     "runtime"
 
     "github.com/mbykov/command-go-levenshtein"
-    // "github.com/mbykov/bhl-gigaam-go"
+    // "github.com/mbykov/gigaam-ort-go"
 )
 
 type Session struct {
@@ -109,7 +109,7 @@ func (s *Session) checkVosk() {
     // Проверяем, не команда ли это
     cmd := s.findCommand(text)
     if cmd != nil {
-        // Это команда
+        // Это команда found
         atomic.AddInt64(&s.commandsFound, 1)
         s.sendCommand(cmd, text)
         log.Printf("[%s] ✅ Команда: %s", s.id, cmd.Name)

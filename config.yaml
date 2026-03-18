@@ -4,7 +4,7 @@ server:
   key: "../../../bhl/.cert/tma.local+2-key.pem"
 
 vosk:
-  model_path: "../Models/vosk-model-streaming-ru"
+  model_path: "../../Models/vosk-model-streaming-ru"
   sample_rate: 16000
   feature_dim: 80
   chunk_ms: 100
@@ -27,7 +27,7 @@ command:
 
 gigaam:
   enabled: true
-  model_path: "/home/michael/LLM/bhl/servers/Models/gg_v3_e2e_rnnt/onnx_e2e_rnnt"
+  model_path: "../../Models/gg_v3_e2e_rnnt/onnx_e2e_rnnt"
   sample_rate: 16000
   feature_dim: 64
   num_threads: 2

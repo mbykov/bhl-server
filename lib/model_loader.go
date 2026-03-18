@@ -6,7 +6,7 @@ import (
 
     "github.com/mbykov/command-go-levenshtein"
     "github.com/mbykov/bhl-vosk-sherpa-go/vosk"
-    "github.com/mbykov/bhl-gigaam-go"
+    "github.com/mbykov/gigaam-ort-go"
 )
 
 type Models struct {
