@@ -1,15 +1,21 @@
 package lib
 
 import (
+    "context"
     "encoding/json"
+    "fmt"
+    "io"
     "log"
-    "strings"
-    "time"
-    "sync/atomic"
+    "os"
     "runtime"
+    "strings"
+    "sync"
+    "sync/atomic"
+    "time"
 
-    "github.com/mbykov/command-go-levenshtein"
-    // "github.com/mbykov/gigaam-ort-go"
+    simplecmd "github.com/mbykov/command-go-levenshtein"
+    qwen "github.com/michael/bhl-qwen-go"
+    "github.com/mbykov/isMath"
 )
 
 type Session struct {
@@ -28,7 +34,13 @@ type Session struct {
     framesProcessed int64
     audioBytesTotal int64
     lastMetricsTime time.Time
-    done            chan struct{}  // для остановки горутин
+    done            chan struct{}
+
+    // Контекст для Qwen и isMath
+    lastFinalText   string                // последний финальный текст (для isMath)
+    lastQwenCommand *qwen.CommandResponse // последний результат Qwen
+    qwenMu          sync.Mutex
+    debugLog        *log.Logger
 }
 
 func NewSession(id string, sendChan chan<- []byte, cfg *Config, models *Models) (*Session, error) {
@@ -37,6 +49,15 @@ func NewSession(id string, sendChan chan<- []byte, cfg *Config, models *Models) 
     vosk, err := NewVoskProcessor(cfg, id)
     if err != nil {
         return nil, err
+    }
+
+    // Инициализируем debug логгер
+    var debugLogger *log.Logger
+    if os.Getenv("DEBUG") == "1" || (cfg.Qwen.Enabled && cfg.Qwen.Debug) {
+        debugLogger = log.New(os.Stdout, fmt.Sprintf("[DEBUG:%s] ", id),
+            log.LstdFlags|log.Lmicroseconds)
+    } else {
+        debugLogger = log.New(io.Discard, "", 0)
     }
 
     s := &Session{
@@ -51,6 +72,9 @@ func NewSession(id string, sendChan chan<- []byte, cfg *Config, models *Models) 
         audioBytesTotal: 0,
         lastMetricsTime: time.Now(),
         done:            make(chan struct{}),
+        lastFinalText:   "",
+        lastQwenCommand: nil,
+        debugLog:        debugLogger,
     }
 
     log.Printf("[%s] ✅ Сессия инициализирована", id)
@@ -61,7 +85,7 @@ func (s *Session) HandleAudio(pcm []byte) {
     // Если это начало новой фразы
     if len(s.currentAudio) == 0 {
         s.phraseStart = time.Now()
-        log.Printf("[%s] 🎤 Начало новой фразы", s.id)
+        s.debugLog.Printf("[%s] 🎤 Начало новой фразы", s.id)
     }
 
     // Накапливаем аудио
@@ -91,85 +115,209 @@ func (s *Session) checkVosk() {
     if !result.IsFinal {
         // ПРОМЕЖУТОЧНЫЙ - просто шлем в браузер
         s.sendToBrowser("interim", text)
-        log.Printf("[%s] 🔄 Interim: %q", s.id, text)
+        s.debugLog.Printf("[%s] 🔄 Interim: %q", s.id, text)
         return
     }
 
-    // ФИНАЛ! Обрабатываем результат
-    log.Printf("[%s] 🎯 Final: %q", s.id, text)
+    // ФИНАЛ! Vosk распознал текст
+    log.Printf("[%s] 🎯 Vosk final: %q", s.id, text)
 
-    // Сохраняем аудио для этой фразы
+    // Сохраняем аудио для GigaAM
     audioForPhrase := make([]byte, len(s.currentAudio))
     copy(audioForPhrase, s.currentAudio)
-    s.currentAudio = make([]byte, 0) // очищаем для новой фразы
-
-    // Обрезаем тишину
+    s.currentAudio = make([]byte, 0)
     audioForPhrase = trimAudioSilence(audioForPhrase, 16000)
 
-    // Проверяем, не команда ли это
-    cmd := s.findCommand(text)
-    if cmd != nil {
-        // Это команда found
-        atomic.AddInt64(&s.commandsFound, 1)
-        s.sendCommand(cmd, text)
-        log.Printf("[%s] ✅ Команда: %s", s.id, cmd.Name)
-    } else {
-        // Обычный текст - отправляем в GigaAM если доступен
-        if s.models.GigaAM != nil && s.cfg.GigaAM.Enabled {
-            s.processWithGigaAM(text, audioForPhrase)
-        } else {
-            s.sendToBrowser("final", text)
+    // Запоминаем предыдущий текст для isMath перед обновлением
+    previousText := s.lastFinalText
+
+    // Обновляем lastFinalText для следующей фразы
+    s.lastFinalText = text
+
+    // Отправляем текст в simple-command, передавая предыдущий текст как контекст
+    s.processWithSimpleCommand(text, audioForPhrase, previousText)
+}
+
+// processWithSimpleCommand отправляет текст в simple-command для определения команды
+func (s *Session) processWithSimpleCommand(text string, audio []byte, previousText string) {
+    s.debugLog.Printf("[%s] 🔄 Simple-command анализ: %q (предыдущий: %q)",
+        s.id, text, previousText)
+
+    // Ищем команду через Левенштейн
+    cmd, external := s.findCommand(text)
+
+    if cmd == nil {
+        // Не команда - отправляем в GigaAM для пунктуации
+        s.debugLog.Printf("[%s] 📝 Не команда, отправляем в GigaAM", s.id)
+        s.processWithGigaAM(text, audio)
+        return
+    }
+
+    // Нашли команду!
+    atomic.AddInt64(&s.commandsFound, 1)
+
+    if external {
+        // External команда - отправляем в Qwen с предыдущим текстом как контекст
+        s.debugLog.Printf("[%s] 🔄 External команда: %s -> Qwen", s.id, cmd.Name)
+        s.processWithQwen(cmd, text, audio, previousText)
+        return
+    }
+
+    // Обычная команда - сразу в браузер
+    s.debugLog.Printf("[%s] ✅ Локальная команда: %s", s.id, cmd.Name)
+    s.sendCommand(cmd, text)
+}
+
+// processWithQwen отправляет external команду в Qwen с isMath проверкой
+func (s *Session) processWithQwen(cmd *simplecmd.CommandDefinition, text string, audio []byte, previousText string) {
+    s.debugLog.Printf("[%s] 🤖 Qwen обработка: cmd=%s, text=%q, контекст=%q",
+        s.id, cmd.Name, text, previousText)
+
+    var req qwen.CommandRequest
+
+    switch cmd.Name {
+    case "createLatex":
+        if !ismath.Check(previousText) {
+            s.debugLog.Printf("[%s] ❌ CREATE: контекст не математический: %q", s.id, previousText)
+            s.processWithGigaAM(text, audio)
+            return
+        }
+
+        // Контекст из Vosk - type="final"
+        req = qwen.CommandRequest{
+            CurrentText: text,
+            Context: &qwen.CommandContext{
+                Type: "final",
+                Text: previousText,
+            },
+        }
+
+    case "editLatex":
+        if !ismath.Check(text) {
+            s.debugLog.Printf("[%s] ❌ EDIT: текущий текст не математический: %q", s.id, text)
+            s.processWithGigaAM(text, audio)
+            return
+        }
+
+        if s.lastQwenCommand == nil {
+            s.debugLog.Printf("[%s] ❌ EDIT: нет контекста предыдущей команды", s.id)
+            s.processWithGigaAM(text, audio)
+            return
+        }
+
+        // Контекст из предыдущей команды Qwen - type="command"
+        req = qwen.CommandRequest{
+            CurrentText: text,
+            Context: &qwen.CommandContext{
+                Type:   "command",
+                Text:   s.lastQwenCommand.Text,
+                Script: s.lastQwenCommand.Script,
+            },
         }
     }
 
-    // Замеряем время обработки фразы
-    log.Printf("[%s] ⏱️ Фраза обработана за %v (аудио: %d байт)",
-        s.id, time.Since(s.phraseStart), len(audioForPhrase))
+    s.callQwen(req, audio, cmd.Name)
 }
 
-func (s *Session) processWithGigaAM(text string, audio []byte) {
-    log.Printf("[%s] 🔄 Отправка в GigaAM (текст: %q, аудио: %d байт)",
-        s.id, text, len(audio))
+// callQwen выполняет вызов к Qwen модели
+func (s *Session) callQwen(req qwen.CommandRequest, audio []byte, cmdName string) {
+    s.qwenMu.Lock()
+    defer s.qwenMu.Unlock()
 
-    // Используем ProcessAudio
-    result, err := s.models.GigaAM.ProcessAudio(audio)
+    s.debugLog.Printf("[%s] 🤖 Вызов Qwen API: cmd=%s, current=%q, context=%+v",
+        s.id, cmdName, req.CurrentText, req.Context)
+
+    ctx := context.Background()
+    if s.cfg.Qwen.TimeoutSec > 0 {
+        var cancel context.CancelFunc
+        ctx, cancel = context.WithTimeout(ctx, time.Duration(s.cfg.Qwen.TimeoutSec)*time.Second)
+        defer cancel()
+    }
+
+    start := time.Now()
+    resp, err := s.models.Qwen.Resolve(ctx, req)
+    duration := time.Since(start)
 
     if err != nil {
-        log.Printf("[%s] ❌ Ошибка GigaAM: %v", s.id, err)
+        s.debugLog.Printf("[%s] ❌ Qwen ошибка: %v (за %v)", s.id, err, duration)
+        s.processWithGigaAM(req.CurrentText, audio)
+        return
+    }
+
+    s.debugLog.Printf("[%s] ✅ Qwen ответ: type=%s, name=%s, script=%q (за %v)",
+        s.id, resp.Type, resp.Name, resp.Script, duration)
+
+    if resp.Type == "final" {
+        // Qwen решил, что это не команда - в GigaAM
+        s.debugLog.Printf("[%s] 📝 Qwen вернул final, отправляем в GigaAM", s.id)
+        s.processWithGigaAM(resp.Text, audio)
+        return
+    }
+
+    // Это команда - сохраняем и отправляем в браузер
+    if cmdName == "createLatex" {
+        // После CREATE сохраняем для будущих EDIT
+        s.lastQwenCommand = resp
+        s.debugLog.Printf("[%s] 💾 Сохранен контекст CREATE: %q", s.id, resp.Script)
+    }
+
+    // Для EDIT тоже сохраняем, чтобы можно было цепочку правок
+    if cmdName == "editLatex" {
+        s.lastQwenCommand = resp
+        s.debugLog.Printf("[%s] 💾 Обновлен контекст EDIT: %q", s.id, resp.Script)
+    }
+
+    s.sendQwenResponse(resp)
+}
+
+// processWithGigaAM отправляет текст в GigaAM для пунктуации
+func (s *Session) processWithGigaAM(text string, audio []byte) {
+    if s.models.GigaAM == nil || !s.cfg.GigaAM.Enabled {
+        // GigaAM отключен или недоступен - отправляем как есть
+        s.debugLog.Printf("[%s] ⚠️ GigaAM отключен, отправляем финал как есть", s.id)
+        s.sendToBrowser("final", text)
+        return
+    }
+
+    s.debugLog.Printf("[%s] 🔄 GigaAM пунктуация: %q (аудио: %d байт)",
+        s.id, text, len(audio))
+
+    result, err := s.models.GigaAM.ProcessAudio(audio)
+    if err != nil {
+        s.debugLog.Printf("[%s] ❌ GigaAM ошибка: %v", s.id, err)
         s.sendToBrowser("final", text)
         return
     }
 
     if strings.TrimSpace(result.Text) == "" {
-        // Пустой результат - используем оригинал
-        log.Printf("[%s] ⚠️ GigaAM вернул пустую строку", s.id)
+        s.debugLog.Printf("[%s] ⚠️ GigaAM вернул пустую строку", s.id)
         s.sendToBrowser("final", text)
         return
     }
 
+    s.debugLog.Printf("[%s] ✅ GigaAM: %q -> %q", s.id, text, result.Text)
     s.sendToBrowser("correct", result.Text)
-    log.Printf("[%s] ✅ Отправлен результат GigaAM: %q", s.id, result.Text)
 }
 
-func (s *Session) findCommand(text string) *command.CommandDefinition {
+// findCommand ищет команду через simple-command (Левенштейн)
+func (s *Session) findCommand(text string) (*simplecmd.CommandDefinition, bool) {
     if s.models.Command == nil || !s.cfg.Command.Enabled {
-        return nil
+        return nil, false
     }
 
     words := strings.Fields(text)
     if len(words) < s.cfg.Command.MinWords {
-        return nil
+        return nil, false
     }
 
     cmdName, external := s.models.Command.Resolve(text)
-    _ = external // игнорируем, так как пока не используем
 
     if cmdName == "" {
-        return nil
+        return nil, false
     }
 
     cmdDef := s.models.Command.GetCommand(cmdName)
-    return cmdDef
+    return cmdDef, external
 }
 
 func (s *Session) sendToBrowser(msgType, text string) {
@@ -181,18 +329,18 @@ func (s *Session) sendToBrowser(msgType, text string) {
 
     select {
     case s.sendChan <- data:
+        s.debugLog.Printf("[%s] 📤 Отправлено: %s", s.id, msgType)
     default:
         log.Printf("[%s] ⚠️ Канал отправки переполнен", s.id)
     }
 }
 
-func (s *Session) sendCommand(cmd *command.CommandDefinition, text string) {
+func (s *Session) sendCommand(cmd *simplecmd.CommandDefinition, text string) {
     msg := map[string]interface{}{
         "type": "command",
         "text": text,
         "name": cmd.Name,
     }
-    // Поле External есть и в CommandDefinition
     if cmd.External {
         msg["external"] = true
     }
@@ -201,6 +349,30 @@ func (s *Session) sendCommand(cmd *command.CommandDefinition, text string) {
 
     select {
     case s.sendChan <- data:
+        s.debugLog.Printf("[%s] 📤 Отправлена команда: %s", s.id, cmd.Name)
+    default:
+        log.Printf("[%s] ⚠️ Канал отправки переполнен", s.id)
+    }
+}
+
+func (s *Session) sendQwenResponse(resp *qwen.CommandResponse) {
+    msg := map[string]interface{}{
+        "type":   "command",
+        "name":   resp.Name,
+        "script": resp.Script,
+        "text":   resp.Text,
+    }
+
+    data, err := json.Marshal(msg)
+    if err != nil {
+        s.debugLog.Printf("[%s] ❌ Ошибка маршалинга ответа Qwen: %v", s.id, err)
+        return
+    }
+
+    select {
+    case s.sendChan <- data:
+        s.debugLog.Printf("[%s] 📤 Отправлен Qwen ответ: %s (%s)",
+            s.id, resp.Name, resp.Script)
     default:
         log.Printf("[%s] ⚠️ Канал отправки переполнен", s.id)
     }
@@ -208,7 +380,6 @@ func (s *Session) sendCommand(cmd *command.CommandDefinition, text string) {
 
 // ============= МЕТОДЫ ДЛЯ КОНТРОЛЬНЫХ СООБЩЕНИЙ =============
 
-// HandleControlMessage обрабатывает управляющие сообщения от клиента
 func (s *Session) HandleControlMessage(msg map[string]interface{}) {
     msgType, ok := msg["type"].(string)
     if !ok {
@@ -254,7 +425,7 @@ func (s *Session) sendMetrics() {
             "audio_bytes_total": atomic.LoadInt64(&s.audioBytesTotal),
         },
         "vosk": map[string]interface{}{
-            "audio_processed": s.vosk.GetAudioBytes(),
+            "audio_processed": atomic.LoadInt64(&s.audioBytesTotal),
         },
         "server": map[string]interface{}{
             "time":    time.Now().Format(time.RFC3339),
@@ -262,13 +433,18 @@ func (s *Session) sendMetrics() {
         },
     }
 
-    // Добавляем метрики GigaAM если доступны
     if s.models.GigaAM != nil {
-        // Если у GigaAM есть метод GetMetrics, можно добавить
-        // metrics["gigaam"] = s.models.GigaAM.GetMetrics()
         metrics["gigaam"] = map[string]interface{}{
             "enabled": true,
             "model":   s.cfg.GigaAM.ModelPath,
+        }
+    }
+
+    if s.models.Qwen != nil {
+        metrics["qwen"] = map[string]interface{}{
+            "enabled":      true,
+            "model":        s.cfg.Qwen.ModelName,
+            "has_context":  s.lastQwenCommand != nil,
         }
     }
 
@@ -288,7 +464,6 @@ func (s *Session) sendMetrics() {
 }
 
 func (s *Session) sendConfig() {
-    // Отправляем только безопасные для клиента параметры конфига
     config := map[string]interface{}{
         "type": "config",
         "config": map[string]interface{}{
@@ -306,16 +481,15 @@ func (s *Session) sendConfig() {
                 "sample_rate": s.cfg.GigaAM.SampleRate,
                 "num_threads": s.cfg.GigaAM.NumThreads,
             },
+            "qwen": map[string]interface{}{
+                "enabled": s.cfg.Qwen.Enabled,
+                "model":   s.cfg.Qwen.ModelName,
+            },
         },
     }
 
     data, _ := json.Marshal(config)
-
-    select {
-    case s.sendChan <- data:
-    default:
-        log.Printf("[%s] ⚠️ Не удалось отправить конфиг", s.id)
-    }
+    s.sendChan <- data
 }
 
 func (s *Session) sendStats() {
@@ -327,16 +501,12 @@ func (s *Session) sendStats() {
             "frames_processed": atomic.LoadInt64(&s.framesProcessed),
             "audio_bytes":      atomic.LoadInt64(&s.audioBytesTotal),
             "audio_buffered":   len(s.currentAudio),
+            "qwen_context":     s.lastQwenCommand != nil,
         },
     }
 
     data, _ := json.Marshal(stats)
-
-    select {
-    case s.sendChan <- data:
-    default:
-        log.Printf("[%s] ⚠️ Не удалось отправить статистику", s.id)
-    }
+    s.sendChan <- data
 }
 
 func (s *Session) sendPong() {
@@ -345,12 +515,7 @@ func (s *Session) sendPong() {
         "time": time.Now().UnixNano(),
     }
     data, _ := json.Marshal(pong)
-
-    select {
-    case s.sendChan <- data:
-    default:
-        // Не логируем, чтобы не засорять
-    }
+    s.sendChan <- data
 }
 
 func (s *Session) resetVosk() {
@@ -363,9 +528,7 @@ func (s *Session) resetVosk() {
         return
     }
 
-    // Очищаем текущий буфер аудио
     s.currentAudio = make([]byte, 0)
-
     s.sendToBrowser("system", "Vosk reset completed")
 }
 
@@ -383,37 +546,27 @@ func (s *Session) forceGC() {
     freedMB := (memBefore.HeapAlloc - memAfter.HeapAlloc) / 1024 / 1024
 
     msg := map[string]interface{}{
-        "type": "gc_result",
-        "freed_mb": freedMB,
+        "type":          "gc_result",
+        "freed_mb":      freedMB,
         "heap_before_mb": memBefore.HeapAlloc / 1024 / 1024,
         "heap_after_mb":  memAfter.HeapAlloc / 1024 / 1024,
     }
     data, _ := json.Marshal(msg)
+    s.sendChan <- data
 
-    select {
-    case s.sendChan <- data:
-    default:
-    }
-
-    // Сразу отправляем обновленные метрики
     s.sendMetrics()
 }
 
 // ============= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =============
 
-// trimAudioSilence обрезает тишину в начале и конце аудио
-// pcm - сырые PCM данные (16-bit, mono)
-// sampleRate - частота дискретизации
 func trimAudioSilence(pcm []byte, sampleRate int) []byte {
-    if len(pcm) < 640 { // меньше 20 мс
+    if len(pcm) < 640 {
         return pcm
     }
 
-    // Параметры для анализа
     frameSize := sampleRate / 100 // 10 мс
-    threshold := 500 // порог тишины
+    threshold := 500
 
-    // Конвертируем в int16 для анализа
     samples := make([]int16, len(pcm)/2)
     for i := 0; i < len(pcm); i += 2 {
         samples[i/2] = int16(pcm[i]) | int16(pcm[i+1])<<8
@@ -457,7 +610,6 @@ func trimAudioSilence(pcm []byte, sampleRate int) []byte {
         }
     }
 
-    // Конвертируем обратно в []byte
     trimmed := make([]byte, (end-start)*2)
     for i := start; i < end; i++ {
         trimmed[(i-start)*2] = byte(samples[i])
@@ -466,19 +618,21 @@ func trimAudioSilence(pcm []byte, sampleRate int) []byte {
     return trimmed
 }
 
-// Close закрывает сессию и освобождает ресурсы
+// Close закрывает сессию
 func (s *Session) Close() {
     log.Printf("[%s] 🔚 Закрытие сессии", s.id)
 
-    // Сигнализируем о завершении
-    close(s.done)
+    select {
+    case <-s.done:
+        // уже закрыт
+    default:
+        close(s.done)
+    }
 
-    // Закрываем Vosk
     if s.vosk != nil {
         s.vosk.Close()
     }
 
-    // Очищаем буферы
     s.currentAudio = nil
 
     log.Printf("[%s] ✅ Сессия закрыта, обработано фреймов: %d, команд: %d, аудио: %.2f KB",
@@ -486,11 +640,4 @@ func (s *Session) Close() {
         atomic.LoadInt64(&s.framesProcessed),
         atomic.LoadInt64(&s.commandsFound),
         float64(atomic.LoadInt64(&s.audioBytesTotal))/1024)
-}
-
-// GetAudioBytes возвращает количество обработанных байт атомарно
-func (v *VoskProcessor) GetAudioBytes() int64 {
-    v.mu.Lock()
-    defer v.mu.Unlock()
-    return v.audioBytes
 }

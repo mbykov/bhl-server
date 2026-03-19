@@ -9,21 +9,11 @@ vosk:
   feature_dim: 80
   chunk_ms: 100
 
-command_:
-  enabled: true
-  commands_file: "./data/commands.json"
-  min_words: 2
-  model:
-    onnx_path: "../Models/multilingual-e5-small/onnx/model.onnx"
-    tokenizer_path: "../Models/multilingual-e5-small/tokenizer.json"
-    lib_path: "/home/michael/go/ort/lib/libonnxruntime.so"
-    threshold: 0.92
-
 command:
   enabled: true
   commands_file: "./data/commands.json"
   min_words: 2
-  threshold: 3  # порог расстояния Левенштейна (0 = точное совпадение)
+  threshold: 3
 
 gigaam:
   enabled: true
@@ -33,10 +23,19 @@ gigaam:
   num_threads: 2
   provider: "cpu"
 
+# Новая секция Qwen
 qwen:
-  enabled: false  # пока заглушка
-  model_path: "../Models/qwen"
+  enabled: true
+  config_path: "../command-qwen-gguf/config.yaml"  # путь к конфигу модуля
+  model_name: "qwen2.5-0.5b.local"                 # для проверки в ollama list
+  timeout_sec: 30                                   # таймаут на весь вызов
+  debug: true                                      # подробное логирование
+
+# Проверки при старте
+checks:
+  require_all_modules: true    # требовать все модули (vosk, gigaam, qwen)
+  require_ollama: true         # требовать доступность ollama
 
 logging:
   verbose: true
-  profile: true  # замерять время этапов
+  profile: true

@@ -192,11 +192,26 @@ func (h *WSHandler) GetStats() map[string]interface{} {
 
 // CloseAllSessions закрывает все активные сессии
 func (h *WSHandler) CloseAllSessions() {
+    log.Println("🔌 Закрытие всех активных сессий...")
+
+    var wg sync.WaitGroup
     h.sessions.Range(func(key, value interface{}) bool {
-        if sess, ok := value.(*Session); ok {
+        wg.Add(1)
+        go func(sess *Session) {
+            defer wg.Done()
             sess.Close()
-        }
+        }(value.(*Session))
+        return true
+    })
+
+    // Ждем завершения всех сессий
+    wg.Wait()
+
+    // Очищаем map
+    h.sessions.Range(func(key, value interface{}) bool {
         h.sessions.Delete(key)
         return true
     })
+
+    log.Printf("✅ Все сессии закрыты")
 }

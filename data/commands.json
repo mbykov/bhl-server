@@ -1,14 +1,15 @@
 [
   {
-    "description": "сгенерируй латех скрипт",
+    "type": "math",
+    "description": "это просто тест!!!",
     "name": "getTime",
     "synonyms": ["сколько времени", "который час"],
     "external": true
   },
   {
     "description": "создай латех скрипт",
-    "name": "checkLatex",
-    "synonyms": ["покажи формулу", "создай формулу", "напиши формулу"],
+    "name": "createLatex",
+    "synonyms": ["покажи формулу", "создай формулу", "напиши формулу", "латех формула"],
     "external": true
   },
   {

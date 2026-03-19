@@ -4,9 +4,11 @@ go 1.25.6
 
 require (
 	github.com/gorilla/websocket v1.5.3
-	github.com/mbykov/gigaam-ort-go v0.0.0-00010101000000-000000000000
 	github.com/mbykov/bhl-vosk-sherpa-go v0.0.0-00010101000000-000000000000
 	github.com/mbykov/command-go-levenshtein v0.0.0-00010101000000-000000000000
+	github.com/mbykov/gigaam-ort-go v0.0.0-00010101000000-000000000000
+	github.com/mbykov/isMath v0.0.0-00010101000000-000000000000 // добавляем isMath
+	github.com/michael/bhl-qwen-go v0.0.0-00010101000000-000000000000
 	github.com/yalue/onnxruntime_go v1.27.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -21,7 +23,9 @@ require (
 )
 
 replace (
-	github.com/mbykov/gigaam-ort-go => ../gigaam-ort-go
 	github.com/mbykov/bhl-vosk-sherpa-go => ../bhl-vosk-sherpa-go
-	github.com/mbykov/command-go-levenshtein => ../command-go-levenshtein
+	github.com/mbykov/command-go-levenshtein => ../simple-command
+	github.com/mbykov/gigaam-ort-go => ../gigaam-ort-go
+	github.com/mbykov/isMath => ../isMath
+	github.com/michael/bhl-qwen-go => ../command-qwen-gguf
 )
