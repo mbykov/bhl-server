@@ -387,6 +387,8 @@ func (s *Session) HandleControlMessage(msg map[string]interface{}) {
     }
 
     switch msgType {
+    case "get_commands":
+        s.sendCommands()
     case "get_metrics":
         s.sendMetrics()
     case "get_config":
@@ -401,6 +403,41 @@ func (s *Session) HandleControlMessage(msg map[string]interface{}) {
         s.forceGC()
     }
 }
+
+func (s *Session) sendCommands() {
+    // Читаем файл commands.json
+    data, err := os.ReadFile(s.cfg.Command.CommandsFile)
+    if err != nil {
+        log.Printf("[%s] ❌ Ошибка загрузки команд: %v", s.id, err)
+        return
+    }
+
+    var commands []map[string]interface{}
+    if err := json.Unmarshal(data, &commands); err != nil {
+        log.Printf("[%s] ❌ Ошибка парсинга команд: %v", s.id, err)
+        return
+    }
+
+    response := map[string]interface{}{
+        "type":     "commands_list",
+        "commands": commands,
+    }
+
+    data, err = json.Marshal(response)
+    if err != nil {
+        log.Printf("[%s] ❌ Ошибка маршалинга ответа: %v", s.id, err)
+        return
+    }
+
+    select {
+    case s.sendChan <- data:
+        log.Printf("[%s] 📤 Отправлен список команд (%d команд)", s.id, len(commands))
+    default:
+        log.Printf("[%s] ⚠️ Канал отправки переполнен", s.id)
+    }
+}
+
+
 
 func (s *Session) sendMetrics() {
     var mem runtime.MemStats

@@ -143,15 +143,17 @@ func (h *WSHandler) Handle(w http.ResponseWriter, r *http.Request) {
         }
 
         // Пробуем распарсить как JSON для контрольных сообщений
+        // Пробуем распарсить как JSON для контрольных сообщений
         var msg map[string]interface{}
         if err := json.Unmarshal(message, &msg); err == nil {
             // Это JSON - возможно контрольное сообщение
             if msgType, ok := msg["type"].(string); ok {
+                log.Printf("[%s] 📨 Получено JSON сообщение типа: %s", sess.id, msgType)  // ДОБАВИТЬ
                 // Проверяем, что это не аудио, а управляющее сообщение
                 switch msgType {
-                case "get_metrics", "get_config", "get_stats", "ping", "reset_vosk", "gc":
+                case "get_metrics", "get_config", "get_stats", "ping", "reset_vosk", "gc", "get_commands":
                     sess.HandleControlMessage(msg)
-                    continue // пропускаем обработку как аудио
+                    continue
                 }
             }
         }
