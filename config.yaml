@@ -1,41 +1,8 @@
 server:
-  port: 6006
+  port: "6006"
   cert: "../../../bhl/.cert/combined-tma-cert.pem"
   key: "../../../bhl/.cert/tma.local+2-key.pem"
 
-vosk:
-  model_path: "../../Models/vosk-model-streaming-ru"
+asr:
+  model_dir: "/home/michael/LLM/bhl/Models/streaming-zipformer-small-ru-vosk-int8"
   sample_rate: 16000
-  feature_dim: 80
-  chunk_ms: 100
-
-command:
-  enabled: true
-  commands_file: "./data/commands.json"
-  min_words: 2
-  threshold: 3
-
-gigaam:
-  enabled: true
-  model_path: "../../Models/gg_v3_e2e_rnnt/onnx_e2e_rnnt"
-  sample_rate: 16000
-  feature_dim: 64
-  num_threads: 2
-  provider: "cpu"
-
-# Новая секция Qwen
-qwen:
-  enabled: true
-  config_path: "../command-qwen-gguf/config.yaml"  # путь к конфигу модуля
-  model_name: "qwen2.5-0.5b.local"                 # для проверки в ollama list
-  timeout_sec: 30                                   # таймаут на весь вызов
-  debug: true                                      # подробное логирование
-
-# Проверки при старте
-checks:
-  require_all_modules: true    # требовать все модули (vosk, gigaam, qwen)
-  require_ollama: true         # требовать доступность ollama
-
-logging:
-  verbose: true
-  profile: true
