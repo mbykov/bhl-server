@@ -6,3 +6,6 @@ server:
 asr:
   model_dir: "/home/michael/LLM/bhl/Models/streaming-zipformer-small-ru-vosk-int8"
   sample_rate: 16000
+
+punctuation:
+  model_dir: "/home/michael/LLM/bhl/Models/vosk-recasepunc-ru-0.22"

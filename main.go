@@ -1,17 +1,18 @@
 package main
 
 import (
-    "context"      // <--- Добавлено
+	"context"
 	"log/slog"
-    "net/http"
-    "os"
-    "log"
-    "os/signal"   // <--- Добавлено
-    "syscall"     // <--- Добавлено
-    "time"
+	"net/http"
+	"os"
+	"log"
+	"os/signal"
+	"syscall"
+	"time"
 
-	"github.com/mbykov/wshandler-go" // замените на ваш путь
-	"github.com/mbykov/asr-zipformer-go"   // ваш модуль ASR
+	"github.com/mbykov/wshandler-go"
+	"github.com/mbykov/asr-zipformer-go"
+	"github.com/mbykov/vosk-punct"  // добавляем импорт
 	"gopkg.in/yaml.v3"
 )
 
@@ -22,19 +23,23 @@ type Config struct {
 		Key  string `yaml:"key"`
 	} `yaml:"server"`
 
-	// Вместо просто asr.Config, опиши структуру с тегами здесь
 	ASR struct {
 		ModelDir   string `yaml:"model_dir"`
 		SampleRate int    `yaml:"sample_rate"`
 	} `yaml:"asr"`
+
+	// Добавляем секцию пунктуации
+	Punctuation struct {
+		ModelDir string `yaml:"model_dir"`
+	} `yaml:"punctuation"`
 }
 
 func main() {
-    // Настройка логгера на уровень DEBUG
-    opts := &slog.HandlerOptions{Level: slog.LevelDebug}
-    logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
-    slog.SetDefault(logger)
-	log.Println("🚀 Запуск нового сервера дневника...")
+	// Настройка логгера
+	opts := &slog.HandlerOptions{Level: slog.LevelDebug}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
+	slog.SetDefault(logger)
+	log.Println("🚀 Запуск сервера дневника...")
 
 	// 1. Загрузка конфига
 	f, err := os.ReadFile("config.yaml")
@@ -46,24 +51,38 @@ func main() {
 		log.Fatalf("❌ Ошибка парсинга конфига: %v", err)
 	}
 
-	// Проверка порта
 	if cfg.Server.Port == "" {
-		cfg.Server.Port = "6006" // Дефолтный безопасный порт
+		cfg.Server.Port = "6006"
 	}
 
-    // Преобразуем локальную структуру в ту, которую ждет asr.New
-    asrParams := asr.Config{
-        ModelDir:   cfg.ASR.ModelDir,
-        SampleRate: cfg.ASR.SampleRate,
-    }
+	// 2. Инициализация ASR
+	asrParams := asr.Config{
+		ModelDir:   cfg.ASR.ModelDir,
+		SampleRate: cfg.ASR.SampleRate,
+	}
+	log.Printf("🔍 ASR модель: '%s'", asrParams.ModelDir)
 
-    // Для отладки — если здесь увидишь пустоту, значит YAML не распарсился
-    log.Printf("🔍 Проверка пути модели: '%s'", asrParams.ModelDir)
+	// 3. Инициализация пунктуатора
+	var punctuator *voskpunct.Punctuator
+	if cfg.Punctuation.ModelDir != "" {
+		log.Printf("🔍 Загрузка пунктуатора из: %s", cfg.Punctuation.ModelDir)
+		punctuator, err = voskpunct.New(voskpunct.Config{
+			ModelDir: cfg.Punctuation.ModelDir,
+		})
+		if err != nil {
+			log.Printf("⚠️ Ошибка загрузки пунктуатора: %v (пунктуация будет отключена)", err)
+			punctuator = nil
+		} else {
+			log.Println("✅ Пунктуатор загружен")
+		}
+	} else {
+		log.Println("⚠️ Пунктуация не настроена в config.yaml")
+	}
 
-	// 2. Инициализация хендлера
-    wsHandler := wshandler.NewWSHandler(asrParams)
+	// 4. Инициализация хендлера с передачей пунктуатора
+	wsHandler := wshandler.NewWSHandler(asrParams, punctuator)
 
-	// 3. Настройка HTTP сервера
+	// 5. Настройка HTTP сервера
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", wsHandler.Handle)
 
@@ -74,7 +93,7 @@ func main() {
 		WriteTimeout: 30 * time.Second,
 	}
 
-	// 4. Запуск сервера
+	// 6. Запуск сервера
 	go func() {
 		log.Printf("🌐 Запуск HTTPS на порту %s...", cfg.Server.Port)
 		if err := server.ListenAndServeTLS(cfg.Server.Cert, cfg.Server.Key); err != nil && err != http.ErrServerClosed {
@@ -82,12 +101,18 @@ func main() {
 		}
 	}()
 
-	// Graceful shutdown (как в старом сервере)
+	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
 	log.Println("🛑 Останавливаем сервер...")
+
+	// Закрываем пунктуатор
+	if punctuator != nil {
+		punctuator.Close()
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
