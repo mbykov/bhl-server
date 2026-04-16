@@ -1,0 +1,211 @@
+/home/michael/LLM/bhl/server/vosk-punct
+
+--- Структура проекта ---
+
+.
+├── cmd
+│   └── test-inference.go
+├── go.mod
+└── go.sum
+
+2 directories, 3 files
+
+---
+
+-- /home/michael/LLM/bhl/server/vosk-punct/go.mod:
+module vosk-punct
+
+go 1.25.6
+
+require (
+	github.com/sugarme/tokenizer v0.3.0
+	github.com/yalue/onnxruntime_go v1.27.0
+)
+
+require (
+	github.com/emirpasic/gods v1.18.1 // indirect
+	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
+	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
+	github.com/rivo/uniseg v0.4.7 // indirect
+	github.com/schollz/progressbar/v2 v2.15.0 // indirect
+	github.com/sugarme/regexpset v0.0.0-20200920021344-4d4ec8eaf93c // indirect
+	golang.org/x/text v0.25.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
+)
+
+
+-- /home/michael/LLM/bhl/server/vosk-punct/cmd/test-inference.go:
+package main
+
+import (
+	"fmt"
+	"log"
+	"strings"
+	"os"
+
+    ort "github.com/yalue/onnxruntime_go"
+    "github.com/sugarme/tokenizer"
+    "github.com/sugarme/tokenizer/pretrained"
+)
+
+func main() {
+	modelDir := "/home/michael/LLM/bhl/Models/vosk-recasepunc-ru-0.22"
+	modelPath := "recasepunc.onnx"
+	vocabPath := modelDir + "/vocab.txt"
+	ortLib := os.Getenv("ORT_HOME") + "/lib/libonnxruntime.so"
+
+	// 1. Working Directory Hack for ONNX .data file
+	originalWd, _ := os.Getwd()
+	os.Chdir(modelDir)
+	defer os.Chdir(originalWd)
+
+	ort.SetSharedLibraryPath(ortLib)
+	if !ort.IsInitialized() {
+		err := ort.InitializeEnvironment()
+		if err != nil {
+			log.Fatalf("Init error: %v", err)
+		}
+	}
+
+	// 2. Session [Input int64, Output float32]
+	session, err := ort.NewDynamicSession[int64, float32](modelPath,
+		[]string{"input_ids", "attention_mask", "token_type_ids"},
+		[]string{"logits"})
+	if err != nil {
+		log.Fatalf("Session error: %v", err)
+	}
+	defer session.Destroy()
+
+	// 3. Tokenizer (Load raw vocab.txt)
+	wp, err := wordpiece.NewModelFromFile(vocabPath, "[UNK]")
+	if err != nil {
+		log.Fatalf("Vocab error: %v", err)
+	}
+	wp.ContinuingSubwordPrefix = "##"
+	tk := tokenizer.NewTokenizer(wp)
+
+	inputStr := "привет как дела меня зовут михаил"
+
+	// Create Input
+	inputSeq := tokenizer.NewInputSequence(inputStr)
+	encodeInput := tokenizer.NewSingleEncodeInput(inputSeq)
+	en, err := tk.Encode(encodeInput, true)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	inputIds := toInt64(en.Ids)
+	mask := toInt64(en.AttentionMask)
+	types := toInt64(en.TypeIds)
+	seqLen := int64(len(inputIds))
+
+	// 4. Input Tensors
+	shape := ort.NewShape(1, seqLen)
+	in1, _ := ort.NewTensor(shape, inputIds)
+	in2, _ := ort.NewTensor(shape, mask)
+	in3, _ := ort.NewTensor(shape, types)
+	defer in1.Destroy(); defer in2.Destroy(); defer in3.Destroy()
+
+	// 5. Output Tensor
+	outputShape := ort.NewShape(1, seqLen, 5)
+	outputData := make([]float32, 1*seqLen*5)
+	outLogits, _ := ort.NewTensor(outputShape, outputData)
+	defer outLogits.Destroy()
+
+	// 6. Run
+	err = session.Run([]*ort.Tensor[int64]{in1, in2, in3}, []*ort.Tensor[float32]{outLogits})
+	if err != nil {
+		log.Fatalf("Inference error: %v", err)
+	}
+
+	// 7. Post-process
+	logits := outLogits.GetData()
+	tokens := en.Tokens
+	var result []string
+
+	for i := 0; i < int(seqLen); i++ {
+		maxIdx := 0
+		maxVal := float32(-1e9)
+		for j := 0; j < 5; j++ {
+			val := logits[i*5+j]
+			if val > maxVal {
+				maxVal = val
+				maxIdx = j
+			}
+		}
+
+		word := tokens[i]
+		// Skip special tokens
+		if word == "[CLS]" || word == "[SEP]" || word == "[UNK]" || word == "[PAD]" {
+			continue
+		}
+
+		isSubword := strings.HasPrefix(word, "##")
+		cleanWord := word
+		if isSubword {
+			cleanWord = word[2:]
+		}
+
+		// Apply Capitalization (Label 4)
+		if maxIdx == 4 && !isSubword {
+			cleanWord = strings.ToUpper(cleanWord[:1]) + cleanWord[1:]
+		}
+
+		if isSubword && len(result) > 0 {
+			result[len(result)-1] += cleanWord
+		} else {
+			result = append(result, cleanWord)
+		}
+
+		// Apply Punctuation
+		lastIdx := len(result) - 1
+		switch maxIdx {
+		case 1: result[lastIdx] += ","
+		case 2: result[lastIdx] += "."
+		case 3: result[lastIdx] += "?"
+		}
+	}
+
+	fmt.Println("Result:", strings.Join(result, " "))
+}
+
+func toInt64(in []int) []int64 {
+	out := make([]int64, len(in))
+	for i, v := range in { out[i] = int64(v) }
+	return out
+}
+
+
+-- /home/michael/LLM/bhl/server/vosk-punct/go.sum:
+github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
+github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/emirpasic/gods v1.18.1 h1:FXtiHYKDGKCW2KzwZKx0iC0PQmdlorYgdFG9jPXJ1Bc=
+github.com/emirpasic/gods v1.18.1/go.mod h1:8tpGGwCnJ5H4r6BWwaV6OrWmMoPhUl5jm/FMNAnJvWQ=
+github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db h1:62I3jR2EmQ4l5rM/4FEfDWcRD+abF5XlKShorW5LRoQ=
+github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db/go.mod h1:l0dey0ia/Uv7NcFFVbCLtqEBQbrT4OCwCSKTEv6enCw=
+github.com/patrickmn/go-cache v2.1.0+incompatible h1:HRMgzkcYKYpi3C8ajMPV8OFXaaRUnok+kx1WdO15EQc=
+github.com/patrickmn/go-cache v2.1.0+incompatible/go.mod h1:3Qf8kWWT7OJRJbdiICTKqZju1ZixQ/KpMGzzAfe6+WQ=
+github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
+github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+github.com/rivo/uniseg v0.4.7 h1:WUdvkW8uEhrYfLC4ZzdpI2ztxP1I582+49Oc5Mq64VQ=
+github.com/rivo/uniseg v0.4.7/go.mod h1:FN3SvrM+Zdj16jyLfmOkMNblXMcoc8DfTHruCPUcx88=
+github.com/schollz/progressbar/v2 v2.15.0 h1:dVzHQ8fHRmtPjD3K10jT3Qgn/+H+92jhPrhmxIJfDz8=
+github.com/schollz/progressbar/v2 v2.15.0/go.mod h1:UdPq3prGkfQ7MOzZKlDRpYKcFqEMczbD7YmbPgpzKMI=
+github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
+github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
+github.com/stretchr/testify v1.10.0 h1:Xv5erBjTwe/5IxqUQTdXv5kgmIvbHo3QQyRwhJsOfJA=
+github.com/stretchr/testify v1.10.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
+github.com/sugarme/regexpset v0.0.0-20200920021344-4d4ec8eaf93c h1:pwb4kNSHb4K89ymCaN+5lPH/MwnfSVg4rzGDh4d+iy4=
+github.com/sugarme/regexpset v0.0.0-20200920021344-4d4ec8eaf93c/go.mod h1:2gwkXLWbDGUQWeL3RtpCmcY4mzCtU13kb9UsAg9xMaw=
+github.com/sugarme/tokenizer v0.3.0 h1:FE8DYbNSz/kSbgEo9l/RjgYHkIJYEdskumitFQBE9FE=
+github.com/sugarme/tokenizer v0.3.0/go.mod h1:VJ+DLK5ZEZwzvODOWwY0cw+B1dabTd3nCB5HuFCItCc=
+github.com/yalue/onnxruntime_go v1.27.0 h1:c1YSgDNtpf0WGtxj3YeRIb8VC5LmM1J+Ve3uHdteC1U=
+github.com/yalue/onnxruntime_go v1.27.0/go.mod h1:b4X26A8pekNb1ACJ58wAXgNKeUCGEAQ9dmACut9Sm/4=
+golang.org/x/text v0.25.0 h1:qVyWApTSYLk/drJRO5mDlNYskwQznZmkpV2c8q9zls4=
+golang.org/x/text v0.25.0/go.mod h1:WEdwpYrmk1qmdHvhkSTNPm3app7v4rsT8F2UD6+VHIA=
+gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
+gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
+gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+
+

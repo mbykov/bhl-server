@@ -1,12 +1,27 @@
-*.so
-*.dll
-*.exe
-bhl
-voice-assistant
+node_modules
+
+TMP
+
+# Output
+.output
+.vercel
+.netlify
+.wrangler
+/.svelte-kit
+/build
+
+analytics.db
+
+# OS
 .DS_Store
-*.log
+Thumbs.db
+
+# Env
 .env
-*.pem
-*.key
-tmp*
-tmp
+.env.*
+!.env.example
+!.env.test
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
